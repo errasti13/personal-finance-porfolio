@@ -102,7 +102,6 @@ class PortfolioSimulator:
     def calculate_portfolio_returns(self, allocations: Dict[str, float], 
                                   data: Dict[str, pd.DataFrame],
                                   initial_investment: float = 10000,
-                                  rebalance_frequency: str = 'monthly',
                                   periodic_contribution: float = 0,
                                   contribution_frequency: str = 'monthly',
                                   periodic_withdrawal: float = 0,
@@ -114,7 +113,6 @@ class PortfolioSimulator:
             allocations: Dictionary with ticker as key and allocation percentage as value
             data: Historical data for each ticker
             initial_investment: Starting portfolio value
-            rebalance_frequency: 'daily', 'weekly', 'monthly', 'quarterly', 'yearly', or 'none'
             periodic_contribution: Amount to add to portfolio periodically (positive number)
             contribution_frequency: How often to add money ('daily', 'weekly', 'monthly', 'quarterly', 'yearly')
             periodic_withdrawal: Amount to withdraw from portfolio periodically (positive number)
@@ -192,11 +190,8 @@ class PortfolioSimulator:
             previous_value = portfolio_value.iloc[i-1]
             adjusted_value = previous_value + contribution_amount - withdrawal_amount
             
-            # Check if rebalancing is needed BEFORE applying market movements
-            should_rebalance = self._should_rebalance(date, previous_date, rebalance_frequency)
-            
-            # Update shares based on contributions/withdrawals or rebalancing
-            if contribution_amount > 0 or withdrawal_amount > 0 or (should_rebalance and rebalance_frequency != 'none'):
+            # Update shares only when money is added or withdrawn
+            if contribution_amount > 0 or withdrawal_amount > 0:
                 # Use previous day's closing prices for allocation decisions (no look-ahead bias)
                 for ticker in valid_tickers:
                     allocation_amount = adjusted_value * allocations[ticker] / 100
@@ -294,22 +289,6 @@ class PortfolioSimulator:
             results[f'{ticker}_Value'] = asset_value_series.values
         
         return results
-    
-    def _should_rebalance(self, current_date: pd.Timestamp, previous_date: pd.Timestamp, 
-                         frequency: str) -> bool:
-        """Check if rebalancing should occur based on frequency."""
-        if frequency == 'daily':
-            return True
-        elif frequency == 'weekly':
-            return current_date.week != previous_date.week
-        elif frequency == 'monthly':
-            return current_date.month != previous_date.month
-        elif frequency == 'quarterly':
-            return (current_date.month - 1) // 3 != (previous_date.month - 1) // 3
-        elif frequency == 'yearly':
-            return current_date.year != previous_date.year
-        else:  # 'none'
-            return False
     
     def _should_add_money(self, current_date: pd.Timestamp, previous_date: pd.Timestamp, 
                          frequency: str) -> bool:
@@ -620,7 +599,7 @@ class PortfolioSimulator:
         time_axis = np.linspace(0, years, simulation_length_months)
         
         # Extract final values for distribution statistics
-        final_values = [s['final_value'] for s in all_simulations]
+        final_values = np.array([s['final_value'] for s in all_simulations])
         
         return {
             'mean': np.mean(final_values),
@@ -634,6 +613,7 @@ class PortfolioSimulator:
             'max': np.max(final_values),
             'success_rate': success_rate,
             'total_simulations': len(all_simulations),
+            'all_results': final_values.tolist(),  # Add this for UI compatibility
             'time_axis': time_axis.tolist(),
             'best_case_series': best_case['value_history'],
             'worst_case_series': worst_case['value_history'],

@@ -906,13 +906,6 @@ def portfolio_dashboard():
                 help="More simulations = more accurate results"
             )
             
-            # Rebalancing frequency
-            rebalance_freq = st.selectbox(
-                "Rebalancing:",
-                ["monthly", "quarterly", "yearly", "none"],
-                index=0
-            )
-            
             st.markdown("**💰 Periodic Contributions/Withdrawals:**")
             
             # Periodic contributions
@@ -965,7 +958,6 @@ def portfolio_dashboard():
                 'initial_investment': initial_investment,
                 'years_to_project': years_to_project,
                 'num_simulations': num_simulations,
-                'rebalance_freq': rebalance_freq,
                 'periodic_contribution': periodic_contribution,
                 'contribution_frequency': contribution_frequency,
                 'periodic_withdrawal': periodic_withdrawal,
@@ -983,9 +975,9 @@ def portfolio_dashboard():
             try:
                 # Calculate optimal historical data range
                 # End date: Today minus projection years (to avoid look-ahead bias)
-                historical_end_date = (datetime.now() - timedelta(days=settings['years_to_project']*365)).strftime('%Y-%m-%d')
+                historical_end_date = (datetime(2024, 12, 1)  - timedelta(days=settings['years_to_project']*365)).strftime('%Y-%m-%d')
                 # Start date: Use maximum available history (go back 20 years for more data)
-                historical_start_date = (datetime.now() - timedelta(days=20*365)).strftime('%Y-%m-%d')
+                historical_start_date = '1920-01-01'
                 
                 # Fetch historical data
                 status_text.text("Fetching historical data...")
@@ -1027,7 +1019,6 @@ def portfolio_dashboard():
                     settings['allocations'],
                     historical_data,
                     settings['initial_investment'],
-                    settings['rebalance_freq'],
                     settings.get('periodic_contribution', 0),
                     settings.get('contribution_frequency', 'monthly'),
                     settings.get('periodic_withdrawal', 0),

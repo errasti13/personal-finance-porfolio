@@ -24,7 +24,7 @@ def test_monte_carlo_simulation():
     print("=" * 70)
     
     # Create synthetic data for testing - multiple years of daily data
-    start_date = '2020-01-01'
+    start_date = '1920-01-01'
     end_date = '2023-12-31'
     dates = pd.date_range(start=start_date, end=end_date, freq='D')
     
@@ -66,7 +66,7 @@ def test_monte_carlo_simulation():
     }
     
     initial_investment = 10000
-    years_to_project = 3  # Reduced from 10 to 3 years since we only have 4 years of data
+    years_to_project = 10  # Reduced from 10 to 3 years since we only have 4 years of data
     num_simulations = 1000
     
     print(f"\n📊 Portfolio Allocation:")
