@@ -192,23 +192,17 @@ class PortfolioSimulator:
             previous_value = portfolio_value.iloc[i-1]
             adjusted_value = previous_value + contribution_amount - withdrawal_amount
             
-            # Update shares if money was added or withdrawn
-            if contribution_amount > 0 or withdrawal_amount > 0:
-                # Redistribute the adjusted portfolio value according to allocations
-                for ticker in valid_tickers:
-                    allocation_amount = adjusted_value * allocations[ticker] / 100
-                    shares[ticker] = allocation_amount / prices[ticker].iloc[i-1]
-            
-            # Check if rebalancing is needed
+            # Check if rebalancing is needed BEFORE applying market movements
             should_rebalance = self._should_rebalance(date, previous_date, rebalance_frequency)
             
-            if should_rebalance and rebalance_frequency != 'none':
-                # Rebalance: recalculate shares based on current adjusted portfolio value
+            # Update shares based on contributions/withdrawals or rebalancing
+            if contribution_amount > 0 or withdrawal_amount > 0 or (should_rebalance and rebalance_frequency != 'none'):
+                # Use previous day's closing prices for allocation decisions (no look-ahead bias)
                 for ticker in valid_tickers:
                     allocation_amount = adjusted_value * allocations[ticker] / 100
                     shares[ticker] = allocation_amount / prices[ticker].iloc[i-1]
             
-            # Calculate current portfolio value after market movements
+            # Calculate current portfolio value after market movements using current day's prices
             current_value = sum(shares[ticker] * prices[ticker].iloc[i] for ticker in valid_tickers)
             portfolio_value.iloc[i] = current_value
             
@@ -219,14 +213,19 @@ class PortfolioSimulator:
         # Calculate net contributions (total money invested)
         net_contributions = total_contributions - total_withdrawals
         
-        # Calculate time-weighted return (pure portfolio performance)
-        # This measures how well the portfolio strategy performed, independent of contribution timing
+        # Calculate time-weighted returns properly
+        # This measures portfolio performance independent of cash flow timing
         time_weighted_returns = []
+        time_weighted_cumulative_series = pd.Series(index=prices.index, dtype=float)
+        time_weighted_cumulative_series.iloc[0] = 0.0  # 0% return at start
+        
+        cumulative_multiplier = 1.0
+        
         for i in range(1, len(prices)):
             previous_value = portfolio_value.iloc[i-1]
-            current_value_before_flows = previous_value
+            current_value = portfolio_value.iloc[i]
             
-            # Check for contributions/withdrawals today
+            # Check for cash flows on this date
             contribution_amount = 0
             withdrawal_amount = 0
             if periodic_contribution > 0:
@@ -236,26 +235,29 @@ class PortfolioSimulator:
                 if self._should_add_money(prices.index[i], prices.index[i-1], withdrawal_frequency):
                     withdrawal_amount = periodic_withdrawal
             
-            # Adjust for flows to get the value after flows but before market movement
-            value_after_flows = previous_value + contribution_amount - withdrawal_amount
+            net_flow = contribution_amount - withdrawal_amount
             
-            # Calculate the return due to market movement only
-            if value_after_flows > 0:
-                market_return = (portfolio_value.iloc[i] - value_after_flows) / value_after_flows
-                time_weighted_returns.append(market_return)
-        
-        # Compound the time-weighted returns
-        time_weighted_cumulative = 1.0
-        for ret in time_weighted_returns:
-            time_weighted_cumulative *= (1 + ret)
-        time_weighted_return_total = (time_weighted_cumulative - 1) * 100
+            # Calculate the portfolio value before market movement (after cash flows)
+            value_before_market = previous_value + net_flow
+            
+            # Calculate pure market return (time-weighted)
+            if value_before_market > 0:
+                daily_market_return = (current_value - value_before_market) / value_before_market
+            else:
+                daily_market_return = 0.0
+            
+            time_weighted_returns.append(daily_market_return)
+            
+            # Update cumulative time-weighted return
+            cumulative_multiplier *= (1 + daily_market_return)
+            time_weighted_cumulative_series.iloc[i] = (cumulative_multiplier - 1) * 100
         
         # Create results DataFrame
         results = pd.DataFrame({
             'Date': prices.index,
             'Portfolio_Value': portfolio_value.values,
-            'Daily_Return': portfolio_value.pct_change().fillna(0),
-            'Cumulative_Return': time_weighted_return_total,  # This is now truly time-weighted
+            'Daily_Return': np.array([0.0] + time_weighted_returns),  # Pure market returns (time-weighted)
+            'Cumulative_Return': time_weighted_cumulative_series.values,  # Time-weighted cumulative returns
             'Total_Contributions': total_contributions.values,
             'Total_Withdrawals': total_withdrawals.values,
             'Net_Contributions': net_contributions.values
@@ -338,10 +340,11 @@ class PortfolioSimulator:
         if results.empty or 'Daily_Return' not in results.columns:
             return {}
         
-        returns = results['Daily_Return'].dropna()
+        # Daily_Return now contains pure time-weighted returns (market performance only)
+        time_weighted_daily_returns = results['Daily_Return'].dropna()
         portfolio_values = results['Portfolio_Value'].dropna()
         
-        if len(returns) == 0:
+        if len(time_weighted_daily_returns) == 0 or len(portfolio_values) == 0:
             return {}
         
         # Get contribution data if available
@@ -349,61 +352,69 @@ class PortfolioSimulator:
         total_contributions = results.get('Total_Contributions', portfolio_values.iloc[0])
         total_withdrawals = results.get('Total_Withdrawals', 0)
         
-        # Calculate metrics accounting for contributions
-        if isinstance(net_contributions, pd.Series):
-            # Money-weighted return (IRR approximation)
-            # This is what the investor actually experienced considering contribution timing
+        # Time-weighted return (pure portfolio performance, independent of cash flow timing)
+        if 'Cumulative_Return' in results.columns:
+            time_weighted_total_return = results['Cumulative_Return'].iloc[-1]
+        else:
+            # Fallback calculation if cumulative return not available
+            cumulative_multiplier = 1.0
+            for ret in time_weighted_daily_returns:
+                cumulative_multiplier *= (1 + ret)
+            time_weighted_total_return = (cumulative_multiplier - 1) * 100
+        
+        # Money-weighted return (what investor experienced with contribution timing)
+        if isinstance(net_contributions, pd.Series) and net_contributions.iloc[-1] > 0:
             final_value = portfolio_values.iloc[-1]
             total_invested = net_contributions.iloc[-1]
-            money_weighted_return = (final_value / total_invested - 1) * 100 if total_invested > 0 else 0
-            
-            # Time-weighted return (portfolio strategy performance)
-            # This measures how well the investment strategy performed independent of timing
-            time_weighted_return = results['Cumulative_Return'].iloc[-1] if 'Cumulative_Return' in results.columns else money_weighted_return
-            
-            # Use time-weighted return for annualized calculation (more accurate for strategy performance)
-            if len(returns) > 0:
-                days_total = (portfolio_values.index[-1] - portfolio_values.index[0]).days
-                if days_total > 0:
-                    annualized_time_weighted = ((1 + time_weighted_return/100) ** (365/days_total) - 1) * 100
-                else:
-                    annualized_time_weighted = 0
+            money_weighted_return = (final_value / total_invested - 1) * 100
+        else:
+            # No external contributions - money-weighted equals time-weighted
+            money_weighted_return = time_weighted_total_return
+        
+        # Calculate annualized time-weighted return (using trading days)
+        if len(time_weighted_daily_returns) > 0:
+            trading_days = len(time_weighted_daily_returns)
+            years = trading_days / 252.0  # Standard trading days per year
+            if years > 0:
+                annualized_time_weighted = ((1 + time_weighted_total_return/100) ** (1/years) - 1) * 100
             else:
                 annualized_time_weighted = 0
-                
         else:
-            # No contributions/withdrawals - both returns are the same
-            money_weighted_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0] - 1) * 100
-            time_weighted_return = money_weighted_return
-            annualized_time_weighted = ((portfolio_values.iloc[-1] / portfolio_values.iloc[0]) ** 
-                               (252 / len(returns)) - 1) * 100 if len(returns) > 0 else 0
+            annualized_time_weighted = 0
         
-        # Legacy annualized return calculation (based on portfolio values)
-        annualized_return = ((portfolio_values.iloc[-1] / portfolio_values.iloc[0]) ** 
-                           (252 / len(returns)) - 1) * 100 if len(returns) > 0 else 0
-        
-        volatility = returns.std() * np.sqrt(252) * 100  # Annualized volatility
+        # Volatility (annualized standard deviation of time-weighted returns)
+        if len(time_weighted_daily_returns) > 1:
+            volatility = time_weighted_daily_returns.std() * np.sqrt(252) * 100
+        else:
+            volatility = 0
         
         # Sharpe ratio (assuming 0% risk-free rate)
-        sharpe_ratio = annualized_return / volatility if volatility > 0 else 0
+        sharpe_ratio = annualized_time_weighted / volatility if volatility > 0 else 0
         
-        # Maximum drawdown
-        rolling_max = portfolio_values.expanding().max()
-        drawdowns = (portfolio_values - rolling_max) / rolling_max * 100
-        max_drawdown = drawdowns.min()
+        # Maximum drawdown (based on time-weighted cumulative returns)
+        if 'Cumulative_Return' in results.columns:
+            cumulative_returns = results['Cumulative_Return'] / 100  # Convert to decimal
+            rolling_max = (1 + cumulative_returns).expanding().max()
+            drawdowns = ((1 + cumulative_returns) - rolling_max) / rolling_max * 100
+            max_drawdown = drawdowns.min()
+        else:
+            # Fallback: calculate drawdown from portfolio values (less accurate with contributions)
+            rolling_max = portfolio_values.expanding().max()
+            drawdowns = (portfolio_values - rolling_max) / rolling_max * 100
+            max_drawdown = drawdowns.min()
         
-        # Best and worst days
-        best_day = returns.max() * 100
-        worst_day = returns.min() * 100
+        # Best and worst days (time-weighted returns)
+        best_day = time_weighted_daily_returns.max() * 100
+        worst_day = time_weighted_daily_returns.min() * 100
         
-        # Win rate
-        positive_days = (returns > 0).sum()
-        total_days = len(returns)
-        win_rate = (positive_days / total_days) * 100 if total_days > 0 else 0
+        # Win rate (percentage of positive return days)
+        positive_days = (time_weighted_daily_returns > 0).sum()
+        total_trading_days = len(time_weighted_daily_returns)
+        win_rate = (positive_days / total_trading_days) * 100 if total_trading_days > 0 else 0
         
         metrics = {
             'Total Return (%)': round(money_weighted_return, 2),
-            'Time-Weighted Return (%)': round(time_weighted_return, 2),
+            'Time-Weighted Return (%)': round(time_weighted_total_return, 2),
             'Annualized Return (%)': round(annualized_time_weighted, 2),
             'Volatility (%)': round(volatility, 2),
             'Sharpe Ratio': round(sharpe_ratio, 2),
@@ -411,7 +422,7 @@ class PortfolioSimulator:
             'Best Day (%)': round(best_day, 2),
             'Worst Day (%)': round(worst_day, 2),
             'Win Rate (%)': round(win_rate, 2),
-            'Total Days': total_days,
+            'Total Days': total_trading_days,
             'Final Value': round(portfolio_values.iloc[-1], 2) if not portfolio_values.empty else 0
         }
         

@@ -882,19 +882,6 @@ def portfolio_dashboard():
         with col2:
             st.markdown("**Simulation Settings:**")
             
-            # Date range for historical data
-            end_date = st.date_input(
-                "Historical Data End:",
-                datetime.now().date(),
-                max_value=datetime.now().date()
-            )
-            
-            start_date = st.date_input(
-                "Historical Data Start:",
-                datetime.now().date() - timedelta(days=5*365),  # 5 years default
-                max_value=end_date
-            )
-            
             # Initial investment
             initial_investment = st.number_input(
                 "Initial Investment ($):",
@@ -975,8 +962,6 @@ def portfolio_dashboard():
             st.session_state.portfolio_settings = {
                 'allocations': allocations,
                 'selected_assets': selected_assets,
-                'start_date': start_date.strftime('%Y-%m-%d'),
-                'end_date': end_date.strftime('%Y-%m-%d'),
                 'initial_investment': initial_investment,
                 'years_to_project': years_to_project,
                 'num_simulations': num_simulations,
@@ -996,6 +981,12 @@ def portfolio_dashboard():
             status_text = st.empty()
             
             try:
+                # Calculate optimal historical data range
+                # End date: Today minus projection years (to avoid look-ahead bias)
+                historical_end_date = (datetime.now() - timedelta(days=settings['years_to_project']*365)).strftime('%Y-%m-%d')
+                # Start date: Use maximum available history (go back 20 years for more data)
+                historical_start_date = (datetime.now() - timedelta(days=20*365)).strftime('%Y-%m-%d')
+                
                 # Fetch historical data
                 status_text.text("Fetching historical data...")
                 tickers = list(settings['allocations'].keys())
@@ -1007,10 +998,13 @@ def portfolio_dashboard():
                 
                 historical_data = simulator.get_historical_data(
                     tickers,
-                    settings['start_date'],
-                    settings['end_date'],
+                    historical_start_date,
+                    historical_end_date,
                     progress_callback
                 )
+                
+                # Display info about the data used
+                st.info(f"📊 Using historical data from {historical_start_date} to {historical_end_date} for Monte Carlo simulation. This avoids look-ahead bias and uses maximum available history for better statistical accuracy.")
                 
                 # Validate we have sufficient data
                 valid_data_count = sum(1 for ticker, data in historical_data.items() 
