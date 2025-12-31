@@ -454,75 +454,130 @@ class PortfolioSimulator:
         if not allocations or not data:
             return {}
         
-        # Calculate historical returns for each asset
-        returns_data = {}
+        # Calculate historical returns for each asset and create return matrix
+        returns_matrix = []
         valid_tickers = []
+        allocation_weights = []
         
         for ticker, allocation in allocations.items():
             if ticker in data and not data[ticker].empty and allocation > 0:
                 prices = data[ticker]['Close'].dropna()
                 if len(prices) > 1:
-                    returns = prices.pct_change().dropna()
-                    returns_data[ticker] = returns
+                    returns = prices.pct_change().dropna().values
+                    returns_matrix.append(returns)
                     valid_tickers.append(ticker)
+                    allocation_weights.append(allocation / 100)
         
         if not valid_tickers:
             return {}
         
-        # Calculate contribution/withdrawal frequencies
+        # Convert to numpy arrays for vectorization
+        returns_matrix = np.array(returns_matrix)  # Shape: (n_assets, n_historical_days)
+        allocation_weights = np.array(allocation_weights)  # Shape: (n_assets,)
+        
+        # Calculate contribution/withdrawal schedules
+        trading_days = years * 252
         contributions_per_year = {'monthly': 12, 'quarterly': 4, 'yearly': 1}
         withdrawals_per_year = {'monthly': 12, 'quarterly': 4, 'yearly': 1}
         
         contrib_freq = contributions_per_year.get(contribution_frequency, 12)
         withdraw_freq = withdrawals_per_year.get(withdrawal_frequency, 12)
         
-        contrib_days = 252 // contrib_freq if contrib_freq > 0 else 0
-        withdraw_days = 252 // withdraw_freq if withdraw_freq > 0 else 0
+        # Create cash flow schedule arrays
+        contrib_schedule = np.zeros(trading_days)
+        withdraw_schedule = np.zeros(trading_days)
         
-        # Run simulations
-        simulation_results = []
-        trading_days = years * 252
+        if periodic_contribution > 0 and contrib_freq > 0:
+            contrib_days = 252 // contrib_freq
+            for day in range(contrib_days, trading_days, contrib_days):
+                contrib_schedule[day] = periodic_contribution
         
-        for sim in range(simulations):
-            portfolio_value = initial_investment
+        if periodic_withdrawal > 0 and withdraw_freq > 0:
+            withdraw_days = 252 // withdraw_freq
+            for day in range(withdraw_days, trading_days, withdraw_days):
+                withdraw_schedule[day] = periodic_withdrawal
+        
+        # Vectorized simulation - generate all random returns at once
+        n_assets, n_historical_returns = returns_matrix.shape
+        
+        # Generate random indices for all simulations and days at once
+        # Shape: (simulations, trading_days, n_assets)
+        random_indices = np.random.randint(0, n_historical_returns, size=(simulations, trading_days, n_assets))
+        
+        # Sample returns using advanced indexing
+        # Shape: (simulations, trading_days, n_assets)
+        sampled_returns = returns_matrix[np.arange(n_assets)[None, None, :], random_indices]
+        
+        # Calculate weighted portfolio returns for all simulations
+        # Shape: (simulations, trading_days)
+        portfolio_daily_returns = np.sum(sampled_returns * allocation_weights[None, None, :], axis=2)
+        
+        # Pre-compute net cash flows for efficiency
+        net_cashflow = contrib_schedule - withdraw_schedule  # Shape: (trading_days,)
+        
+        # Memory-efficient vectorized simulation
+        if periodic_contribution == 0 and periodic_withdrawal == 0:
+            # No cash flows - ultra-fast pure vectorized calculation
+            if progress_callback:
+                progress_callback(1, 2)
             
-            for day in range(trading_days):
-                # Add periodic contributions
-                if periodic_contribution > 0 and contrib_days > 0 and day % contrib_days == 0 and day > 0:
-                    portfolio_value += periodic_contribution
-                
-                # Subtract periodic withdrawals
-                if periodic_withdrawal > 0 and withdraw_days > 0 and day % withdraw_days == 0 and day > 0:
-                    portfolio_value = max(0, portfolio_value - periodic_withdrawal)
-                
-                # Calculate daily portfolio return
-                daily_return = 0
-                for ticker in valid_tickers:
-                    # Sample random return from historical data
-                    random_return = np.random.choice(returns_data[ticker])
-                    daily_return += (allocations[ticker] / 100) * random_return
-                
-                portfolio_value *= (1 + daily_return)
+            daily_multipliers = 1 + portfolio_daily_returns  # Shape: (simulations, trading_days)
+            final_values = initial_investment * np.prod(daily_multipliers, axis=1)
             
-            simulation_results.append(max(0, portfolio_value))  # Ensure non-negative
+            if progress_callback:
+                progress_callback(2, 2)
             
-            if progress_callback and sim % 100 == 0:
-                progress_callback(sim + 1, simulations)
+        else:
+            # With cash flows - optimized loop with memory efficiency
+            # Process in smaller chunks if dealing with large simulations to manage memory
+            chunk_size = min(simulations, 10000)  # Process max 10k simulations at once
+            all_final_values = []
+            
+            for chunk_start in range(0, simulations, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, simulations)
+                chunk_sims = chunk_end - chunk_start
+                
+                # Initialize values for this chunk
+                portfolio_values = np.zeros((chunk_sims, trading_days + 1))
+                portfolio_values[:, 0] = initial_investment
+                
+                # Get returns for this chunk
+                chunk_returns = portfolio_daily_returns[chunk_start:chunk_end]
+                
+                # Simulate this chunk
+                for day in range(trading_days):
+                    current_values = portfolio_values[:, day]
+                    
+                    # Apply cash flows
+                    if net_cashflow[day] != 0:
+                        current_values = np.maximum(0, current_values + net_cashflow[day])
+                    
+                    # Apply market returns
+                    portfolio_values[:, day + 1] = current_values * (1 + chunk_returns[:, day])
+                
+                all_final_values.extend(portfolio_values[:, -1])
+                
+                # Progress callback
+                if progress_callback:
+                    progress_callback(chunk_end, simulations)
+            
+            final_values = np.array(all_final_values)
         
-        # Calculate statistics
-        results = np.array(simulation_results)
+        # Ensure non-negative values
+        final_values = np.maximum(0, final_values)
         
+        # Calculate statistics from vectorized results
         return {
-            'mean': np.mean(results),
-            'median': np.median(results),
-            'std': np.std(results),
-            'percentile_5': np.percentile(results, 5),
-            'percentile_25': np.percentile(results, 25),
-            'percentile_75': np.percentile(results, 75),
-            'percentile_95': np.percentile(results, 95),
-            'min': np.min(results),
-            'max': np.max(results),
-            'all_results': results.tolist()
+            'mean': np.mean(final_values),
+            'median': np.median(final_values),
+            'std': np.std(final_values),
+            'percentile_5': np.percentile(final_values, 5),
+            'percentile_25': np.percentile(final_values, 25),
+            'percentile_75': np.percentile(final_values, 75),
+            'percentile_95': np.percentile(final_values, 95),
+            'min': np.min(final_values),
+            'max': np.max(final_values),
+            'all_results': final_values.tolist()
         }
     
     def get_asset_correlation(self, tickers: List[str], data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
