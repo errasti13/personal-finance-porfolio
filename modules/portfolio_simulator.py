@@ -428,7 +428,11 @@ class PortfolioSimulator:
                              initial_investment: float = 10000,
                              years: int = 10, 
                              simulations: int = 1000,
-                             progress_callback=None) -> Dict:
+                             progress_callback=None,
+                             periodic_contribution: float = 0,
+                             contribution_frequency: str = 'monthly',
+                             periodic_withdrawal: float = 0,
+                             withdrawal_frequency: str = 'monthly') -> Dict:
         """
         Run Monte Carlo simulation for portfolio projections.
         
@@ -439,6 +443,10 @@ class PortfolioSimulator:
             years: Number of years to project
             simulations: Number of simulation runs
             progress_callback: Optional callback for progress updates
+            periodic_contribution: Amount to contribute periodically
+            contribution_frequency: How often to contribute ('monthly', 'quarterly', 'yearly')
+            periodic_withdrawal: Amount to withdraw periodically
+            withdrawal_frequency: How often to withdraw ('monthly', 'quarterly', 'yearly')
             
         Returns:
             Dictionary with simulation results
@@ -461,6 +469,16 @@ class PortfolioSimulator:
         if not valid_tickers:
             return {}
         
+        # Calculate contribution/withdrawal frequencies
+        contributions_per_year = {'monthly': 12, 'quarterly': 4, 'yearly': 1}
+        withdrawals_per_year = {'monthly': 12, 'quarterly': 4, 'yearly': 1}
+        
+        contrib_freq = contributions_per_year.get(contribution_frequency, 12)
+        withdraw_freq = withdrawals_per_year.get(withdrawal_frequency, 12)
+        
+        contrib_days = 252 // contrib_freq if contrib_freq > 0 else 0
+        withdraw_days = 252 // withdraw_freq if withdraw_freq > 0 else 0
+        
         # Run simulations
         simulation_results = []
         trading_days = years * 252
@@ -469,6 +487,14 @@ class PortfolioSimulator:
             portfolio_value = initial_investment
             
             for day in range(trading_days):
+                # Add periodic contributions
+                if periodic_contribution > 0 and contrib_days > 0 and day % contrib_days == 0 and day > 0:
+                    portfolio_value += periodic_contribution
+                
+                # Subtract periodic withdrawals
+                if periodic_withdrawal > 0 and withdraw_days > 0 and day % withdraw_days == 0 and day > 0:
+                    portfolio_value = max(0, portfolio_value - periodic_withdrawal)
+                
                 # Calculate daily portfolio return
                 daily_return = 0
                 for ticker in valid_tickers:
@@ -478,7 +504,7 @@ class PortfolioSimulator:
                 
                 portfolio_value *= (1 + daily_return)
             
-            simulation_results.append(portfolio_value)
+            simulation_results.append(max(0, portfolio_value))  # Ensure non-negative
             
             if progress_callback and sim % 100 == 0:
                 progress_callback(sim + 1, simulations)
