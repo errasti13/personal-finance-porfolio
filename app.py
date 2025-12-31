@@ -107,7 +107,7 @@ def load_sample_net_worth_data():
         sample_data = {
             'Date': dates.strftime('%Y-%m-%d'),
             'UBS Account (CHF)': np.random.normal(10000, 2000, len(dates)).round(2),
-            'IBKR Account (CHF)': np.random.normal(15000, 3000, len(dates)).round(2),
+            'IBKR Account (EUR)': np.random.normal(15000, 3000, len(dates)).round(2),
             'Kutxabank Account (EUR)': np.random.normal(1500, 500, len(dates)).round(2)
         }
         return pd.DataFrame(sample_data)
@@ -119,9 +119,10 @@ def get_forex_rate(from_currency: str, to_currency: str) -> float:
     
     try:
         ticker = f"{from_currency}{to_currency}=X"
-        forex_data = yf.download(ticker, period="1d", interval="1d")
+        forex_data = yf.download(ticker, period="1d", interval="1d", progress=False)
         if not forex_data.empty:
-            return forex_data['Close'].iloc[-1]
+            rate = forex_data['Close'].iloc[-1]
+            return float(rate)
     except:
         pass
     
@@ -137,18 +138,23 @@ def get_forex_rate(from_currency: str, to_currency: str) -> float:
     
     return rates.get(f"{from_currency}{to_currency}", 1.0)
 
-def convert_to_chf(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert all currencies to CHF for unified tracking."""
+def convert_to_eur(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert all currencies to EUR for unified tracking."""
     df_converted = df.copy()
     
-    # Get current EUR to CHF rate
-    eur_to_chf = get_forex_rate('EUR', 'CHF')
+    # Get current exchange rates to EUR
+    chf_to_eur = get_forex_rate('CHF', 'EUR')
+    usd_to_eur = get_forex_rate('USD', 'EUR')
     
-    # Convert EUR columns to CHF
+    # Convert CHF columns to EUR
     for col in df_converted.columns:
-        if 'EUR' in col:
-            chf_col_name = col.replace('EUR', 'CHF')
-            df_converted[chf_col_name] = df_converted[col] * eur_to_chf
+        if 'CHF' in col:
+            eur_col_name = col.replace('CHF', 'EUR')
+            df_converted[eur_col_name] = df_converted[col] * chf_to_eur
+            df_converted = df_converted.drop(columns=[col])
+        elif 'USD' in col:
+            eur_col_name = col.replace('USD', 'EUR')
+            df_converted[eur_col_name] = df_converted[col] * usd_to_eur
             df_converted = df_converted.drop(columns=[col])
     
     return df_converted
@@ -170,7 +176,7 @@ def net_worth_dashboard():
         uploaded_file = st.file_uploader(
             "Upload your net worth data (CSV)",
             type=['csv'],
-            help="CSV should have Date column and account columns with currency indicators"
+            help="CSV should have Date column and account columns with currency indicators (CHF, EUR, USD)"
         )
         
         if uploaded_file is not None:
@@ -185,14 +191,14 @@ def net_worth_dashboard():
             with st.form("add_entry"):
                 entry_date = st.date_input("Date", value=datetime.now().date())
                 ubs_chf = st.number_input("UBS Account (CHF)", value=0.0, step=100.0)
-                ibkr_chf = st.number_input("IBKR Account (CHF)", value=0.0, step=100.0)
+                ibkr_eur = st.number_input("IBKR Account (EUR)", value=0.0, step=100.0)
                 kutxa_eur = st.number_input("Kutxabank Account (EUR)", value=0.0, step=100.0)
                 
                 if st.form_submit_button("Add Entry"):
                     new_entry = pd.DataFrame({
                         'Date': [entry_date.strftime('%Y-%m-%d')],
                         'UBS Account (CHF)': [ubs_chf],
-                        'IBKR Account (CHF)': [ibkr_chf],
+                        'IBKR Account (EUR)': [ibkr_eur],
                         'Kutxabank Account (EUR)': [kutxa_eur]
                     })
                     
@@ -212,19 +218,19 @@ def net_worth_dashboard():
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values('Date')
         
-        # Convert to CHF for unified tracking
-        df_chf = convert_to_chf(df)
+        # Convert to EUR for unified tracking
+        df_eur = convert_to_eur(df)
         
         # Calculate total net worth
-        value_columns = [col for col in df_chf.columns if col != 'Date' and 'CHF' in col]
-        df_chf['Total_CHF'] = df_chf[value_columns].sum(axis=1)
+        value_columns = [col for col in df_eur.columns if col != 'Date' and 'EUR' in col]
+        df_eur['Total_EUR'] = df_eur[value_columns].sum(axis=1)
         
         # Current metrics
-        latest = df_chf.iloc[-1]
-        if len(df_chf) > 1:
-            previous = df_chf.iloc[-2]
-            change = latest['Total_CHF'] - previous['Total_CHF']
-            change_pct = (change / previous['Total_CHF']) * 100
+        latest = df_eur.iloc[-1]
+        if len(df_eur) > 1:
+            previous = df_eur.iloc[-2]
+            change = latest['Total_EUR'] - previous['Total_EUR']
+            change_pct = (change / previous['Total_EUR']) * 100
         else:
             change = 0
             change_pct = 0
@@ -235,29 +241,29 @@ def net_worth_dashboard():
         with col1:
             st.metric(
                 label="💰 Total Net Worth",
-                value=f"CHF {latest['Total_CHF']:,.2f}",
-                delta=f"CHF {change:,.2f}"
+                value=f"EUR {latest['Total_EUR']:,.2f}",
+                delta=f"EUR {change:,.2f}"
             )
         
         with col2:
-            ubs_value = latest.get('UBS Account (CHF)', 0)
+            ubs_value = latest.get('UBS Account (EUR)', 0)
             st.metric(
                 label="🏦 UBS Account",
-                value=f"CHF {ubs_value:,.2f}"
+                value=f"EUR {ubs_value:,.2f}"
             )
         
         with col3:
-            ibkr_value = latest.get('IBKR Account (CHF)', 0)
+            ibkr_value = latest.get('IBKR Account (EUR)', 0)
             st.metric(
                 label="📊 IBKR Account",
-                value=f"CHF {ibkr_value:,.2f}"
+                value=f"EUR {ibkr_value:,.2f}"
             )
         
         with col4:
-            kutxa_value = latest.get('Kutxabank Account (CHF)', 0)
+            kutxa_value = latest.get('Kutxabank Account (EUR)', 0)
             st.metric(
                 label="🏛️ Kutxabank Account",
-                value=f"CHF {kutxa_value:,.2f}"
+                value=f"EUR {kutxa_value:,.2f}"
             )
         
         # Charts section
@@ -266,11 +272,11 @@ def net_worth_dashboard():
         # Net worth trend chart
         st.subheader("📈 Net Worth Trend")
         fig_trend = px.line(
-            df_chf, 
+            df_eur, 
             x='Date', 
-            y='Total_CHF',
+            y='Total_EUR',
             title='Net Worth Over Time',
-            labels={'Total_CHF': 'Total Net Worth (CHF)', 'Date': 'Date'}
+            labels={'Total_EUR': 'Total Net Worth (EUR)', 'Date': 'Date'}
         )
         fig_trend.update_layout(height=400)
         st.plotly_chart(fig_trend, use_container_width=True)
@@ -280,7 +286,7 @@ def net_worth_dashboard():
         
         with col1:
             st.subheader("🏦 Account Breakdown")
-            account_values = {col.replace(' (CHF)', ''): latest[col] for col in value_columns}
+            account_values = {col.replace(' (EUR)', ''): latest[col] for col in value_columns}
             fig_pie = px.pie(
                 values=list(account_values.values()),
                 names=list(account_values.keys()),
@@ -293,15 +299,15 @@ def net_worth_dashboard():
             fig_multi = go.Figure()
             for col in value_columns:
                 fig_multi.add_trace(go.Scatter(
-                    x=df_chf['Date'],
-                    y=df_chf[col],
+                    x=df_eur['Date'],
+                    y=df_eur[col],
                     mode='lines+markers',
-                    name=col.replace(' (CHF)', '')
+                    name=col.replace(' (EUR)', '')
                 ))
             fig_multi.update_layout(
                 title='Individual Account Trends',
                 xaxis_title='Date',
-                yaxis_title='Value (CHF)',
+                yaxis_title='Value (EUR)',
                 height=400
             )
             st.plotly_chart(fig_multi, use_container_width=True)
@@ -335,7 +341,7 @@ def net_worth_dashboard():
         st.markdown("""
         **Expected CSV format:**
         ```
-        Date,UBS Account (CHF),IBKR Account (CHF),Kutxabank Account (EUR)
+        Date,UBS Account (CHF),IBKR Account (EUR),Kutxabank Account (EUR)
         2025-01-31,10000.00,15000.00,1500.00
         2025-02-28,10500.00,15500.00,1550.00
         ```
@@ -463,13 +469,13 @@ def transaction_analysis_dashboard():
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("💵 Total Income", f"CHF {income:,.2f}")
+            st.metric("💵 Total Income", f"EUR {income:,.2f}")
         
         with col2:
-            st.metric("💸 Total Expenses", f"CHF {expenses:,.2f}")
+            st.metric("💸 Total Expenses", f"EUR {expenses:,.2f}")
         
         with col3:
-            st.metric("💰 Net Savings", f"CHF {net_savings:,.2f}")
+            st.metric("💰 Net Savings", f"EUR {net_savings:,.2f}")
         
         with col4:
             st.metric("📊 Savings Rate", f"{savings_rate:.1f}%")
@@ -539,7 +545,7 @@ def transaction_analysis_dashboard():
         fig_income_exp.update_layout(
             title='Monthly Income vs Expenses',
             xaxis_title='Month',
-            yaxis_title='Amount (CHF)',
+            yaxis_title='Amount (EUR)',
             barmode='group'
         )
         st.plotly_chart(fig_income_exp, use_container_width=True)
@@ -614,16 +620,16 @@ def overview_dashboard():
             df_nw = st.session_state.net_worth_data.copy()
             df_nw['Date'] = pd.to_datetime(df_nw['Date'])
             df_nw = df_nw.sort_values('Date')
-            df_nw_chf = convert_to_chf(df_nw)
-            value_columns = [col for col in df_nw_chf.columns if col != 'Date' and 'CHF' in col]
-            df_nw_chf['Total_CHF'] = df_nw_chf[value_columns].sum(axis=1)
+            df_nw_eur = convert_to_eur(df_nw)
+            value_columns = [col for col in df_nw_eur.columns if col != 'Date' and 'EUR' in col]
+            df_nw_eur['Total_EUR'] = df_nw_eur[value_columns].sum(axis=1)
             
-            latest_nw = df_nw_chf.iloc[-1]['Total_CHF']
+            latest_nw = df_nw_eur.iloc[-1]['Total_EUR']
             
             with col1:
                 st.metric(
                     label="💰 Current Net Worth",
-                    value=f"CHF {latest_nw:,.2f}"
+                    value=f"EUR {latest_nw:,.2f}"
                 )
         
         # Transaction metrics
@@ -641,19 +647,19 @@ def overview_dashboard():
             with col2:
                 st.metric(
                     label="📈 Monthly Income",
-                    value=f"CHF {monthly_income:,.2f}"
+                    value=f"EUR {monthly_income:,.2f}"
                 )
             
             with col3:
                 st.metric(
                     label="📉 Monthly Expenses",
-                    value=f"CHF {monthly_expenses:,.2f}"
+                    value=f"EUR {monthly_expenses:,.2f}"
                 )
             
             with col4:
                 st.metric(
                     label="💵 Monthly Savings",
-                    value=f"CHF {monthly_savings:,.2f}",
+                    value=f"EUR {monthly_savings:,.2f}",
                     delta=f"{(monthly_savings/monthly_income*100) if monthly_income > 0 else 0:.1f}% savings rate"
                 )
         
@@ -669,9 +675,9 @@ def overview_dashboard():
                 # Net worth trend
                 st.subheader("📈 Net Worth Growth")
                 fig_nw = px.line(
-                    df_nw_chf,
+                    df_nw_eur,
                     x='Date',
-                    y='Total_CHF',
+                    y='Total_EUR',
                     title='Net Worth Over Time'
                 )
                 st.plotly_chart(fig_nw, use_container_width=True)
@@ -747,9 +753,9 @@ def overview_dashboard():
         with col2:
             if has_net_worth:
                 # Net worth growth
-                if len(df_nw_chf) > 1:
-                    start_value = df_nw_chf.iloc[0]['Total_CHF']
-                    end_value = df_nw_chf.iloc[-1]['Total_CHF']
+                if len(df_nw_eur) > 1:
+                    start_value = df_nw_eur.iloc[0]['Total_EUR']
+                    end_value = df_nw_eur.iloc[-1]['Total_EUR']
                     growth_rate = (end_value - start_value) / start_value * 100
                     
                     if growth_rate > 5:
@@ -1366,7 +1372,7 @@ def main():
             - 🎯 **Financial Overview**: Get insights into your overall financial health
             
             **Features:**
-            - Multi-currency support (CHF, EUR, USD)
+            - Multi-currency support (CHF, EUR, USD) - unified to EUR
             - PDF bank statement processing
             - Interactive charts and analytics
             - Export capabilities
