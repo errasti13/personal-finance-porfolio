@@ -75,15 +75,21 @@ class PortfolioSimulator:
                 df = stock.history(start=start_date, end=end_date, auto_adjust=True)
                 
                 if not df.empty and len(df) > 5:  # Require at least 5 data points
+                    # Normalize timezone to avoid timezone conflicts
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_convert('UTC').tz_localize(None)
+                    
                     # Cache the data
                     self._data_cache[cache_key] = df
                     return ticker, df
                 else:
-                    st.warning(f"Insufficient data available for {ticker} ({len(df) if not df.empty else 0} data points)")
+                    if hasattr(st, 'warning'):  # Check if streamlit context exists
+                        st.warning(f"Insufficient data available for {ticker} ({len(df) if not df.empty else 0} data points)")
                     return ticker, pd.DataFrame()
                     
             except Exception as e:
-                st.error(f"Error fetching data for {ticker}: {str(e)}")
+                if hasattr(st, 'error'):  # Check if streamlit context exists
+                    st.error(f"Error fetching data for {ticker}: {str(e)}")
                 return ticker, pd.DataFrame()
         
         # Use ThreadPoolExecutor for concurrent downloads
@@ -103,9 +109,7 @@ class PortfolioSimulator:
                                   data: Dict[str, pd.DataFrame],
                                   initial_investment: float = 10000,
                                   periodic_contribution: float = 0,
-                                  contribution_frequency: str = 'monthly',
-                                  periodic_withdrawal: float = 0,
-                                  withdrawal_frequency: str = 'monthly') -> pd.DataFrame:
+                                  contribution_frequency: str = 'monthly') -> pd.DataFrame:
         """
         Calculate portfolio returns based on allocations and historical data.
         
@@ -113,10 +117,8 @@ class PortfolioSimulator:
             allocations: Dictionary with ticker as key and allocation percentage as value
             data: Historical data for each ticker
             initial_investment: Starting portfolio value
-            periodic_contribution: Amount to add to portfolio periodically (positive number)
-            contribution_frequency: How often to add money ('daily', 'weekly', 'monthly', 'quarterly', 'yearly')
-            periodic_withdrawal: Amount to withdraw from portfolio periodically (positive number)
-            withdrawal_frequency: How often to withdraw money ('daily', 'weekly', 'monthly', 'quarterly', 'yearly')
+            periodic_contribution: Amount to add to portfolio periodically (can be negative for withdrawals)
+            contribution_frequency: How often to add/withdraw money ('monthly', 'quarterly', 'yearly')
             
         Returns:
             DataFrame with portfolio performance metrics
@@ -124,32 +126,127 @@ class PortfolioSimulator:
         if not allocations or not data:
             return pd.DataFrame()
         
-        # Find common date range
-        all_dates = None
+        # Find assets with valid data
         valid_tickers = []
+        date_ranges = {}
         
         for ticker, allocation in allocations.items():
             if ticker in data and not data[ticker].empty and allocation > 0:
-                if all_dates is None:
-                    all_dates = data[ticker].index
-                else:
-                    all_dates = all_dates.intersection(data[ticker].index)
-                valid_tickers.append(ticker)
+                df = data[ticker]
+                if len(df) >= 5:  # Require at least 5 data points
+                    valid_tickers.append(ticker)
+                    date_ranges[ticker] = (df.index.min(), df.index.max())
         
-        if not valid_tickers or all_dates.empty:
-            st.warning("No overlapping data found for selected assets")
+        if not valid_tickers:
+            if hasattr(st, 'error'):
+                st.error("No assets with sufficient data found. Each asset needs at least 5 data points.")
             return pd.DataFrame()
         
-        # Create price matrix
-        prices = pd.DataFrame()
+        # Find the best common date range (maximize overlap while keeping reasonable history)
+        # Use the latest start date and earliest end date among all assets
+        common_start = max(date_ranges[ticker][0] for ticker in valid_tickers)
+        common_end = min(date_ranges[ticker][1] for ticker in valid_tickers)
+        
+        # Check if we have reasonable overlap
+        overlap_days = (common_end - common_start).days
+        
+        if overlap_days < 30:
+            # If strict overlap is too small, use a more flexible approach
+            # Find the asset with the most recent start date and use that as baseline
+            latest_start_ticker = max(valid_tickers, key=lambda t: date_ranges[t][0])
+            common_start = date_ranges[latest_start_ticker][0]
+            
+            # Use the earliest end date that gives us at least 1 year of data from common_start
+            min_end_date = common_start + timedelta(days=365)
+            available_end_dates = [date_ranges[ticker][1] for ticker in valid_tickers if date_ranges[ticker][1] >= min_end_date]
+            
+            if not available_end_dates:
+                if hasattr(st, 'error'):
+                    st.error(f"Insufficient overlapping data. Latest asset starts at {common_start.strftime('%Y-%m-%d')}, but need at least 1 year of data.")
+                return pd.DataFrame()
+            
+            common_end = min(available_end_dates)
+            overlap_days = (common_end - common_start).days
+            
+            # Filter out assets that don't cover this range
+            valid_tickers = [ticker for ticker in valid_tickers 
+                           if date_ranges[ticker][0] <= common_start and date_ranges[ticker][1] >= common_end]
+        
+        if overlap_days < 30:
+            if hasattr(st, 'error'):
+                st.error(f"Insufficient overlapping data found. Only {overlap_days} days of overlap between selected assets.")
+            return pd.DataFrame()
+        
+        if hasattr(st, 'info'):
+            st.info(f"Using {len(valid_tickers)} assets with {overlap_days:,} days of overlapping data ({common_start.strftime('%Y-%m-%d')} to {common_end.strftime('%Y-%m-%d')})")
+        
+        # Fetch historical data for the common period with proper timezone handling
+        asset_data = {}
         for ticker in valid_tickers:
-            prices[ticker] = data[ticker].loc[all_dates]['Close']
+            try:
+                # Use yf.download for consistent data fetching
+                ticker_data = yf.download(ticker, start=common_start, end=common_end + pd.Timedelta(days=1), 
+                                        progress=False, threads=False)
+                
+                if ticker_data.empty:
+                    if hasattr(st, 'warning'):
+                        st.warning(f"No data retrieved for {ticker} in the common period")
+                    continue
+                
+                # Handle MultiIndex columns (yf.download sometimes returns MultiIndex)
+                if isinstance(ticker_data.columns, pd.MultiIndex):
+                    ticker_data = ticker_data.droplevel(1, axis=1)
+                
+                # Normalize timezone - convert to UTC then remove timezone info
+                if hasattr(ticker_data.index, 'tz') and ticker_data.index.tz is not None:
+                    ticker_data.index = ticker_data.index.tz_convert('UTC').tz_localize(None)
+                
+                # Get adjusted close prices
+                if 'Adj Close' in ticker_data.columns:
+                    price_series = ticker_data['Adj Close'].dropna()
+                elif 'Close' in ticker_data.columns:
+                    price_series = ticker_data['Close'].dropna()
+                else:
+                    if hasattr(st, 'warning'):
+                        st.warning(f"No Close price data for {ticker}")
+                    continue
+                
+                if len(price_series) > 5:  # Require at least 5 data points
+                    asset_data[ticker] = price_series
+                    
+            except Exception as e:
+                if hasattr(st, 'warning'):
+                    st.warning(f"Error fetching data for {ticker}: {str(e)}")
+                continue
+        
+        if not asset_data:
+            if hasattr(st, 'error'):
+                st.error("No valid asset data retrieved for the common period")
+            return pd.DataFrame()
+        
+        # Create aligned price matrix using outer join, then dropna to get common dates
+        prices = pd.DataFrame(asset_data)
+        prices = prices.dropna()  # Remove dates where any asset is missing
+        
+        if prices.empty or len(prices) < 30:
+            if hasattr(st, 'error'):
+                st.error(f"Insufficient aligned price data: {len(prices) if not prices.empty else 0} days")
+            return pd.DataFrame()
+        
+        # Update valid_tickers to only include assets with data
+        valid_tickers = [ticker for ticker in valid_tickers if ticker in prices.columns]
+        
+        if hasattr(st, 'info'):
+            actual_start = prices.index[0].strftime('%Y-%m-%d')
+            actual_end = prices.index[-1].strftime('%Y-%m-%d')
+            st.info(f"Using {len(valid_tickers)} assets with {len(prices):,} days of data ({actual_start} to {actual_end})")
         
         # Remove any remaining NaN values
         prices = prices.dropna()
         
         if prices.empty:
-            st.warning("No valid price data after cleaning")
+            if hasattr(st, 'warning'):
+                st.warning("No valid price data after cleaning")
             return pd.DataFrame()
         
         # Calculate returns
@@ -174,24 +271,18 @@ class PortfolioSimulator:
             date = prices.index[i]
             previous_date = prices.index[i-1]
             
-            # Check for periodic contributions
-            contribution_amount = 0
-            if periodic_contribution > 0:
+            # Check for periodic cash flow (positive = contribution, negative = withdrawal)
+            cash_flow_amount = 0
+            if periodic_contribution != 0:
                 if self._should_add_money(date, previous_date, contribution_frequency):
-                    contribution_amount = periodic_contribution
+                    cash_flow_amount = periodic_contribution
             
-            # Check for periodic withdrawals
-            withdrawal_amount = 0
-            if periodic_withdrawal > 0:
-                if self._should_add_money(date, previous_date, withdrawal_frequency):
-                    withdrawal_amount = periodic_withdrawal
-            
-            # Apply contribution/withdrawal before market movements
+            # Apply cash flow before market movements
             previous_value = portfolio_value.iloc[i-1]
-            adjusted_value = previous_value + contribution_amount - withdrawal_amount
+            adjusted_value = previous_value + cash_flow_amount
             
-            # Update shares only when money is added or withdrawn
-            if contribution_amount > 0 or withdrawal_amount > 0:
+            # Update shares when money is added or withdrawn
+            if cash_flow_amount != 0:
                 # Use previous day's closing prices for allocation decisions (no look-ahead bias)
                 for ticker in valid_tickers:
                     allocation_amount = adjusted_value * allocations[ticker] / 100
@@ -201,9 +292,16 @@ class PortfolioSimulator:
             current_value = sum(shares[ticker] * prices[ticker].iloc[i] for ticker in valid_tickers)
             portfolio_value.iloc[i] = current_value
             
-            # Track cumulative contributions and withdrawals
-            total_contributions.iloc[i] = total_contributions.iloc[i-1] + contribution_amount
-            total_withdrawals.iloc[i] = total_withdrawals.iloc[i-1] + withdrawal_amount
+            # Track cumulative contributions and withdrawals separately
+            if cash_flow_amount > 0:
+                total_contributions.iloc[i] = total_contributions.iloc[i-1] + cash_flow_amount
+                total_withdrawals.iloc[i] = total_withdrawals.iloc[i-1]
+            elif cash_flow_amount < 0:
+                total_contributions.iloc[i] = total_contributions.iloc[i-1]
+                total_withdrawals.iloc[i] = total_withdrawals.iloc[i-1] + abs(cash_flow_amount)
+            else:
+                total_contributions.iloc[i] = total_contributions.iloc[i-1]
+                total_withdrawals.iloc[i] = total_withdrawals.iloc[i-1]
         
         # Calculate net contributions (total money invested)
         net_contributions = total_contributions - total_withdrawals
@@ -221,19 +319,13 @@ class PortfolioSimulator:
             current_value = portfolio_value.iloc[i]
             
             # Check for cash flows on this date
-            contribution_amount = 0
-            withdrawal_amount = 0
-            if periodic_contribution > 0:
+            cash_flow_amount = 0
+            if periodic_contribution != 0:
                 if self._should_add_money(prices.index[i], prices.index[i-1], contribution_frequency):
-                    contribution_amount = periodic_contribution
-            if periodic_withdrawal > 0:
-                if self._should_add_money(prices.index[i], prices.index[i-1], withdrawal_frequency):
-                    withdrawal_amount = periodic_withdrawal
-            
-            net_flow = contribution_amount - withdrawal_amount
+                    cash_flow_amount = periodic_contribution
             
             # Calculate the portfolio value before market movement (after cash flows)
-            value_before_market = previous_value + net_flow
+            value_before_market = previous_value + cash_flow_amount
             
             # Calculate pure market return (time-weighted)
             if value_before_market > 0:
@@ -270,19 +362,12 @@ class PortfolioSimulator:
                 date = prices.index[i]
                 previous_date = prices.index[i-1]
                 
-                # Add contributions to this asset
-                contribution_amount = 0
-                if periodic_contribution > 0:
+                # Add cash flow to this asset (positive = contribution, negative = withdrawal)
+                cash_flow_amount = 0
+                if periodic_contribution != 0:
                     if self._should_add_money(date, previous_date, contribution_frequency):
-                        contribution_amount = periodic_contribution * allocations[ticker] / 100
-                        asset_shares += contribution_amount / prices[ticker].iloc[i-1]
-                
-                # Subtract withdrawals from this asset
-                withdrawal_amount = 0
-                if periodic_withdrawal > 0:
-                    if self._should_add_money(date, previous_date, withdrawal_frequency):
-                        withdrawal_amount = periodic_withdrawal * allocations[ticker] / 100
-                        asset_shares -= withdrawal_amount / prices[ticker].iloc[i-1]
+                        cash_flow_amount = periodic_contribution * allocations[ticker] / 100
+                        asset_shares += cash_flow_amount / prices[ticker].iloc[i-1]
                 
                 asset_value_series.iloc[i] = asset_shares * prices[ticker].iloc[i]
             
@@ -420,9 +505,7 @@ class PortfolioSimulator:
                              simulations: int = 10000,
                              progress_callback=None,
                              periodic_contribution: float = 0,
-                             contribution_frequency: str = 'monthly',
-                             periodic_withdrawal: float = 0,
-                             withdrawal_frequency: str = 'monthly') -> Dict:
+                             contribution_frequency: str = 'monthly') -> Dict:
         """
         Run Monte Carlo simulation using the exact logic from portfolio-tester.
         Uses monthly returns for more realistic portfolio simulation.
@@ -468,20 +551,44 @@ class PortfolioSimulator:
         if not valid_tickers:
             return {}
         
-        # Find minimum data points across all assets
+        # Find minimum data points across all assets (this is the most restrictive asset)
         min_data_points = min(len(monthly_returns[ticker]) for ticker in valid_tickers)
         simulation_length_months = years * 12
         
+        # Check if we have enough historical data for the simulation
         if min_data_points < simulation_length_months:
+            if hasattr(st, 'error'):
+                # Find which asset is the most restrictive
+                restrictive_asset = None
+                for ticker in valid_tickers:
+                    if len(monthly_returns[ticker]) == min_data_points:
+                        # Convert ticker back to friendly name
+                        for friendly_name, ticker_symbol in self.AVAILABLE_ASSETS.items():
+                            if ticker_symbol == ticker:
+                                restrictive_asset = friendly_name
+                                break
+                        if not restrictive_asset:
+                            restrictive_asset = ticker
+                        break
+                
+                available_years = min_data_points / 12
+                st.error(f"Insufficient historical data for {years}-year simulation. "
+                        f"The most restrictive asset ({restrictive_asset}) only has {min_data_points} months "
+                        f"({available_years:.1f} years) of data, but {simulation_length_months} months "
+                        f"({years} years) are required for the simulation.")
+                
+                if available_years >= 1:
+                    max_simulation_years = int(available_years)
+                    st.info(f"💡 Try reducing the simulation period to {max_simulation_years} years or fewer, "
+                           f"or choose assets with longer historical data.")
             return {}
         
         # Simulation parameters
         months_per_year = 12
-        contribution_interval = 1 if contribution_frequency == 'monthly' else 12
-        withdrawal_interval = 1 if withdrawal_frequency == 'monthly' else 12
+        cash_flow_interval = 1 if contribution_frequency == 'monthly' else 12
         
-        # Net periodic cash flow
-        net_periodic_flow = periodic_contribution - periodic_withdrawal
+        # Periodic cash flow (can be positive or negative)
+        periodic_cash_flow = periodic_contribution
         
         # Run simulations
         all_simulations = []
@@ -514,18 +621,19 @@ class PortfolioSimulator:
                         # Apply return to current portfolio value
                         portfolio_value *= (1 + monthly_portfolio_return)
                         
-                        # Handle periodic contributions/withdrawals
-                        if month % contribution_interval == 0 and periodic_contribution != 0:
-                            portfolio_value += periodic_contribution
-                            if periodic_contribution > 0:
-                                total_invested += periodic_contribution
+                        # Handle periodic cash flow (positive = contribution, negative = withdrawal)
+                        if month % cash_flow_interval == 0 and periodic_cash_flow != 0:
+                            portfolio_value += periodic_cash_flow
+                            if periodic_cash_flow > 0:
+                                total_invested += periodic_cash_flow
                                 investments.append({
-                                    'amount': periodic_contribution,
+                                    'amount': periodic_cash_flow,
                                     'months_invested': simulation_length_months - month
                                 })
-                        
-                        if month % withdrawal_interval == 0 and periodic_withdrawal != 0:
-                            portfolio_value -= periodic_withdrawal
+                            else:
+                                # For withdrawals, we don't adjust total_invested 
+                                # as this represents money taken out, not initial investment
+                                pass
                         
                         # Check for portfolio depletion
                         if portfolio_value < small_value_threshold:

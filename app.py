@@ -858,6 +858,18 @@ def portfolio_dashboard():
                 st.markdown("**Set Allocations (%):**")
                 allocations = {}
                 
+                # Quick asset compatibility check
+                asset_info = []
+                for asset in selected_assets:
+                    ticker = simulator.AVAILABLE_ASSETS[asset]
+                    asset_info.append(f"• **{asset}** ({ticker})")
+                
+                with st.expander("📊 Selected Assets Information", expanded=False):
+                    st.markdown("You've selected:")
+                    for info in asset_info:
+                        st.markdown(info)
+                    st.markdown("💡 **Tip**: If you get 'No overlapping data' error, try selecting assets with similar time periods (e.g., all stocks from major indices, or all ETFs).")
+                
                 # Create allocation sliders
                 col_count = min(len(selected_assets), 3)
                 cols = st.columns(col_count)
@@ -950,9 +962,10 @@ def portfolio_dashboard():
             
             try:
                 # Calculate optimal historical data range
-                # End date: Today minus projection years (to avoid look-ahead bias)
-                historical_end_date = (datetime(2024, 12, 1)  - timedelta(days=settings['years_to_project']*365)).strftime('%Y-%m-%d')
-                # Start date: Use maximum available history (go back 20 years for more data)
+                # Use all available historical data up to the present for better statistical accuracy
+                # This is NOT look-ahead bias - we're using historical patterns to simulate futures
+                historical_end_date = datetime.now().strftime('%Y-%m-%d')
+                # Start date: Use maximum available history for robust Monte Carlo simulation
                 historical_start_date = '1920-01-01'
                 
                 # Fetch historical data
@@ -972,7 +985,7 @@ def portfolio_dashboard():
                 )
                 
                 # Display info about the data used
-                st.info(f"📊 Using historical data from {historical_start_date} to {historical_end_date} for Monte Carlo simulation. This avoids look-ahead bias and uses maximum available history for better statistical accuracy.")
+                st.info(f"📊 Using historical data from {historical_start_date} to {historical_end_date} for Monte Carlo simulation. Using all available historical data provides better statistical accuracy for future projections.")
                 
                 # Validate we have sufficient data
                 valid_data_count = sum(1 for ticker, data in historical_data.items() 
