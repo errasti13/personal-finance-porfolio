@@ -17,6 +17,7 @@ import yfinance as yf
 import tempfile
 from typing import Dict, Optional
 from modules.transaction_analyzer import TransactionAnalyzer
+from modules.portfolio_simulator import PortfolioSimulator
 
 # Page configuration
 st.set_page_config(
@@ -798,7 +799,7 @@ def overview_dashboard():
         # Quick setup options
         st.subheader("🚀 Quick Setup")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             if st.button("📈 Set Up Net Worth Tracking", use_container_width=True):
@@ -806,9 +807,516 @@ def overview_dashboard():
                 st.rerun()
         
         with col2:
+            if st.button("📊 Test Portfolio Strategies", use_container_width=True):
+                st.session_state.page = "Portfolio"
+                st.rerun()
+        
+        with col3:
             if st.button("💳 Analyze Transactions", use_container_width=True):
                 st.session_state.page = "Transactions"
                 st.rerun()
+
+def portfolio_dashboard():
+    """Portfolio simulation and backtesting dashboard."""
+    st.markdown('<h1 class="main-header">📊 Portfolio Simulator</h1>', unsafe_allow_html=True)
+    
+    # Initialize portfolio simulator
+    if 'portfolio_simulator' not in st.session_state:
+        st.session_state.portfolio_simulator = PortfolioSimulator()
+    
+    simulator = st.session_state.portfolio_simulator
+    
+    # Create tabs for different portfolio functions
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Portfolio Builder", "📈 Backtest Results", "🎲 Monte Carlo", "📊 Analysis"])
+    
+    with tab1:
+        st.subheader("🎯 Build Your Portfolio")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("**Select Assets:**")
+            
+            # Asset selection
+            available_assets = list(simulator.AVAILABLE_ASSETS.keys())
+            selected_assets = st.multiselect(
+                "Choose assets for your portfolio:",
+                available_assets,
+                default=["S&P 500", "MSCI World", "Gold"],
+                help="Select 2-10 assets for your portfolio"
+            )
+            
+            if selected_assets:
+                st.markdown("**Set Allocations (%):**")
+                allocations = {}
+                
+                # Create allocation sliders
+                col_count = min(len(selected_assets), 3)
+                cols = st.columns(col_count)
+                
+                for i, asset in enumerate(selected_assets):
+                    with cols[i % col_count]:
+                        allocations[simulator.AVAILABLE_ASSETS[asset]] = st.slider(
+                            asset,
+                            0, 100, 
+                            100 // len(selected_assets),  # Equal allocation by default
+                            step=1,
+                            key=f"allocation_{asset}"
+                        )
+                
+                # Check if allocations sum to 100%
+                total_allocation = sum(allocations.values())
+                if total_allocation != 100:
+                    st.warning(f"⚠️ Total allocation: {total_allocation}%. Please adjust to 100%.")
+                else:
+                    st.success(f"✅ Total allocation: {total_allocation}%")
+        
+        with col2:
+            st.markdown("**Backtest Settings:**")
+            
+            # Date range selection
+            end_date = st.date_input(
+                "End Date:",
+                datetime.now().date(),
+                max_value=datetime.now().date()
+            )
+            
+            start_date = st.date_input(
+                "Start Date:",
+                datetime.now().date() - timedelta(days=5*365),  # 5 years default
+                max_value=end_date
+            )
+            
+            # Initial investment
+            initial_investment = st.number_input(
+                "Initial Investment ($):",
+                min_value=1000,
+                max_value=10000000,
+                value=10000,
+                step=1000
+            )
+            
+            # Rebalancing frequency
+            rebalance_freq = st.selectbox(
+                "Rebalancing:",
+                ["monthly", "quarterly", "yearly", "none"],
+                index=0
+            )
+            
+            # Run backtest button
+            run_backtest = st.button(
+                "🚀 Run Backtest",
+                type="primary",
+                disabled=total_allocation != 100 or len(selected_assets) < 1,
+                use_container_width=True
+            )
+        
+        # Store settings in session state
+        if selected_assets and total_allocation == 100:
+            st.session_state.portfolio_settings = {
+                'allocations': allocations,
+                'selected_assets': selected_assets,
+                'start_date': start_date.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d'),
+                'initial_investment': initial_investment,
+                'rebalance_freq': rebalance_freq
+            }
+    
+    with tab2:
+        st.subheader("📈 Backtest Results")
+        
+        if 'portfolio_settings' in st.session_state and run_backtest:
+            settings = st.session_state.portfolio_settings
+            
+            # Show progress
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                # Fetch data
+                status_text.text("Fetching historical data...")
+                tickers = list(settings['allocations'].keys())
+                
+                def progress_callback(current, total):
+                    progress = current / total
+                    progress_bar.progress(progress)
+                    status_text.text(f"Fetching data: {current}/{total} assets")
+                
+                historical_data = simulator.get_historical_data(
+                    tickers,
+                    settings['start_date'],
+                    settings['end_date'],
+                    progress_callback
+                )
+                
+                # Calculate portfolio performance
+                status_text.text("Calculating portfolio performance...")
+                results = simulator.calculate_portfolio_returns(
+                    settings['allocations'],
+                    historical_data,
+                    settings['initial_investment'],
+                    settings['rebalance_freq']
+                )
+                
+                # Calculate metrics
+                metrics = simulator.calculate_metrics(results)
+                
+                progress_bar.empty()
+                status_text.empty()
+                
+                if not results.empty:
+                    # Display metrics
+                    st.markdown("**📊 Portfolio Performance:**")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric(
+                            "Total Return",
+                            f"{metrics.get('Total Return (%)', 0):.2f}%",
+                            help="Total return over the entire period"
+                        )
+                        st.metric(
+                            "Annualized Return",
+                            f"{metrics.get('Annualized Return (%)', 0):.2f}%",
+                            help="Average yearly return"
+                        )
+                    
+                    with col2:
+                        st.metric(
+                            "Volatility",
+                            f"{metrics.get('Volatility (%)', 0):.2f}%",
+                            help="Annual volatility (risk measure)"
+                        )
+                        st.metric(
+                            "Sharpe Ratio",
+                            f"{metrics.get('Sharpe Ratio', 0):.2f}",
+                            help="Risk-adjusted return measure"
+                        )
+                    
+                    with col3:
+                        st.metric(
+                            "Max Drawdown",
+                            f"{metrics.get('Maximum Drawdown (%)', 0):.2f}%",
+                            help="Largest peak-to-trough decline"
+                        )
+                        st.metric(
+                            "Win Rate",
+                            f"{metrics.get('Win Rate (%)', 0):.1f}%",
+                            help="Percentage of positive days"
+                        )
+                    
+                    with col4:
+                        st.metric(
+                            "Final Value",
+                            f"${metrics.get('Final Value', 0):,.0f}",
+                            help="Portfolio value at the end"
+                        )
+                        st.metric(
+                            "Best/Worst Day",
+                            f"+{metrics.get('Best Day (%)', 0):.1f}% / {metrics.get('Worst Day (%)', 0):.1f}%",
+                            help="Best and worst single day returns"
+                        )
+                    
+                    # Portfolio value chart
+                    st.markdown("**📈 Portfolio Growth:**")
+                    
+                    fig = go.Figure()
+                    
+                    # Add portfolio value line
+                    fig.add_trace(go.Scatter(
+                        x=results['Date'],
+                        y=results['Portfolio_Value'],
+                        mode='lines',
+                        name='Portfolio',
+                        line=dict(color='#1f77b4', width=2)
+                    ))
+                    
+                    # Add individual asset comparisons if requested
+                    if st.checkbox("Show individual asset performance"):
+                        colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+                        for i, asset in enumerate(settings['selected_assets']):
+                            ticker = simulator.AVAILABLE_ASSETS[asset]
+                            if f'{ticker}_Value' in results.columns:
+                                fig.add_trace(go.Scatter(
+                                    x=results['Date'],
+                                    y=results[f'{ticker}_Value'],
+                                    mode='lines',
+                                    name=asset,
+                                    line=dict(color=colors[i % len(colors)], width=1, dash='dash'),
+                                    opacity=0.7
+                                ))
+                    
+                    fig.update_layout(
+                        title="Portfolio Value Over Time",
+                        xaxis_title="Date",
+                        yaxis_title="Portfolio Value ($)",
+                        hovermode='x',
+                        height=500
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Store results for other tabs
+                    st.session_state.portfolio_results = results
+                    st.session_state.portfolio_metrics = metrics
+                    st.session_state.historical_data = historical_data
+                
+                else:
+                    st.error("No data available for the selected period and assets.")
+            
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"Error running backtest: {str(e)}")
+        
+        elif 'portfolio_settings' not in st.session_state:
+            st.info("👈 Configure your portfolio in the Portfolio Builder tab first.")
+        
+        else:
+            st.info("Click 'Run Backtest' in the Portfolio Builder tab to see results.")
+    
+    with tab3:
+        st.subheader("🎲 Monte Carlo Simulation")
+        
+        if 'portfolio_settings' in st.session_state and 'historical_data' in st.session_state:
+            settings = st.session_state.portfolio_settings
+            historical_data = st.session_state.historical_data
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                years_to_project = st.slider(
+                    "Years to project:",
+                    1, 30, 10,
+                    help="Number of years to simulate forward"
+                )
+                
+                num_simulations = st.select_slider(
+                    "Number of simulations:",
+                    options=[100, 250, 500, 1000, 2000],
+                    value=1000,
+                    help="More simulations = more accurate results"
+                )
+            
+            with col2:
+                if st.button("🎲 Run Monte Carlo", type="primary"):
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    def progress_callback(current, total):
+                        progress = current / total
+                        progress_bar.progress(progress)
+                        status_text.text(f"Running simulation: {current}/{total}")
+                    
+                    try:
+                        mc_results = simulator.monte_carlo_simulation(
+                            settings['allocations'],
+                            historical_data,
+                            settings['initial_investment'],
+                            years_to_project,
+                            num_simulations,
+                            progress_callback
+                        )
+                        
+                        progress_bar.empty()
+                        status_text.empty()
+                        
+                        if mc_results:
+                            # Display results
+                            st.markdown("**🎯 Projected Portfolio Value:**")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.metric(
+                                    "Expected Value",
+                                    f"${mc_results['mean']:,.0f}",
+                                    help="Average outcome across all simulations"
+                                )
+                                st.metric(
+                                    "Median Value",
+                                    f"${mc_results['median']:,.0f}",
+                                    help="Middle value (50th percentile)"
+                                )
+                            
+                            with col2:
+                                st.metric(
+                                    "Best Case (95th)",
+                                    f"${mc_results['percentile_95']:,.0f}",
+                                    help="95% chance of being below this value"
+                                )
+                                st.metric(
+                                    "Worst Case (5th)",
+                                    f"${mc_results['percentile_5']:,.0f}",
+                                    help="95% chance of being above this value"
+                                )
+                            
+                            with col3:
+                                st.metric(
+                                    "Standard Deviation",
+                                    f"${mc_results['std']:,.0f}",
+                                    help="Measure of variability"
+                                )
+                                prob_positive = sum(1 for x in mc_results['all_results'] if x > settings['initial_investment']) / len(mc_results['all_results']) * 100
+                                st.metric(
+                                    "Prob. of Gain",
+                                    f"{prob_positive:.1f}%",
+                                    help="Probability of positive returns"
+                                )
+                            
+                            # Distribution histogram
+                            st.markdown("**📊 Return Distribution:**")
+                            
+                            fig = go.Figure()
+                            
+                            fig.add_trace(go.Histogram(
+                                x=mc_results['all_results'],
+                                nbinsx=50,
+                                name='Portfolio Value',
+                                opacity=0.7
+                            ))
+                            
+                            # Add percentile lines
+                            for percentile, label in [(5, '5th'), (50, 'Median'), (95, '95th')]:
+                                value = mc_results[f'percentile_{percentile}'] if percentile != 50 else mc_results['median']
+                                fig.add_vline(
+                                    x=value,
+                                    line_dash="dash",
+                                    annotation_text=f"{label}: ${value:,.0f}"
+                                )
+                            
+                            fig.update_layout(
+                                title=f"Portfolio Value Distribution ({years_to_project} years, {num_simulations:,} simulations)",
+                                xaxis_title="Portfolio Value ($)",
+                                yaxis_title="Frequency",
+                                height=400
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    except Exception as e:
+                        progress_bar.empty()
+                        status_text.empty()
+                        st.error(f"Error running Monte Carlo simulation: {str(e)}")
+        
+        else:
+            st.info("👈 Run a backtest first to enable Monte Carlo simulation.")
+    
+    with tab4:
+        st.subheader("📊 Portfolio Analysis")
+        
+        if 'portfolio_settings' in st.session_state and 'historical_data' in st.session_state:
+            settings = st.session_state.portfolio_settings
+            historical_data = st.session_state.historical_data
+            
+            # Asset correlation analysis
+            st.markdown("**🔗 Asset Correlation Matrix:**")
+            
+            tickers = list(settings['allocations'].keys())
+            correlation_matrix = simulator.get_asset_correlation(tickers, historical_data)
+            
+            if not correlation_matrix.empty:
+                # Create correlation heatmap
+                fig = px.imshow(
+                    correlation_matrix.values,
+                    x=[settings['selected_assets'][i] for i, ticker in enumerate(tickers) if ticker in correlation_matrix.columns],
+                    y=[settings['selected_assets'][i] for i, ticker in enumerate(tickers) if ticker in correlation_matrix.columns],
+                    color_continuous_scale='RdBu',
+                    aspect="auto",
+                    color_continuous_midpoint=0
+                )
+                
+                fig.update_layout(
+                    title="Asset Correlation Matrix",
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Correlation insights
+                st.markdown("**🔍 Correlation Insights:**")
+                
+                high_corr_pairs = []
+                low_corr_pairs = []
+                
+                for i in range(len(correlation_matrix.columns)):
+                    for j in range(i+1, len(correlation_matrix.columns)):
+                        corr_value = correlation_matrix.iloc[i, j]
+                        asset1 = correlation_matrix.columns[i]
+                        asset2 = correlation_matrix.columns[j]
+                        
+                        # Find asset names
+                        name1 = next((name for name, ticker in simulator.AVAILABLE_ASSETS.items() if ticker == asset1), asset1)
+                        name2 = next((name for name, ticker in simulator.AVAILABLE_ASSETS.items() if ticker == asset2), asset2)
+                        
+                        if corr_value > 0.7:
+                            high_corr_pairs.append((name1, name2, corr_value))
+                        elif corr_value < 0.3:
+                            low_corr_pairs.append((name1, name2, corr_value))
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if high_corr_pairs:
+                        st.markdown("**🔴 High Correlation (>70%):**")
+                        for asset1, asset2, corr in high_corr_pairs[:3]:
+                            st.write(f"• {asset1} ↔ {asset2}: {corr:.2f}")
+                        st.caption("These assets tend to move together")
+                    else:
+                        st.markdown("**🟢 Good Diversification:**")
+                        st.write("No highly correlated asset pairs found")
+                
+                with col2:
+                    if low_corr_pairs:
+                        st.markdown("**🟢 Low Correlation (<30%):**")
+                        for asset1, asset2, corr in low_corr_pairs[:3]:
+                            st.write(f"• {asset1} ↔ {asset2}: {corr:.2f}")
+                        st.caption("These assets provide good diversification")
+            
+            # Portfolio optimization suggestion
+            st.markdown("---")
+            st.markdown("**⚡ Portfolio Optimization:**")
+            
+            if st.button("🎯 Suggest Optimized Allocation"):
+                with st.spinner("Optimizing portfolio..."):
+                    optimized_allocations = simulator.optimize_portfolio(tickers, historical_data)
+                    
+                    if optimized_allocations:
+                        st.markdown("**Optimized Allocations (Equal Risk Contribution):**")
+                        
+                        # Compare current vs optimized
+                        comparison_data = []
+                        for ticker in tickers:
+                            asset_name = next((name for name, t in simulator.AVAILABLE_ASSETS.items() if t == ticker), ticker)
+                            current_alloc = settings['allocations'].get(ticker, 0)
+                            optimized_alloc = optimized_allocations.get(ticker, 0)
+                            
+                            comparison_data.append({
+                                'Asset': asset_name,
+                                'Current (%)': current_alloc,
+                                'Optimized (%)': optimized_alloc,
+                                'Difference': optimized_alloc - current_alloc
+                            })
+                        
+                        comparison_df = pd.DataFrame(comparison_data)
+                        
+                        # Style the dataframe
+                        def highlight_changes(row):
+                            if row['Difference'] > 5:
+                                return ['background-color: lightgreen'] * len(row)
+                            elif row['Difference'] < -5:
+                                return ['background-color: lightcoral'] * len(row)
+                            else:
+                                return [''] * len(row)
+                        
+                        styled_df = comparison_df.style.apply(highlight_changes, axis=1)
+                        st.dataframe(styled_df, use_container_width=True)
+                        
+                        st.caption("🟢 Green: Increase allocation, 🔴 Red: Decrease allocation")
+        
+        else:
+            st.info("👈 Run a backtest first to enable portfolio analysis.")
 
 def main():
     """Main application function."""
@@ -822,7 +1330,7 @@ def main():
         # Navigation
         page = st.selectbox(
             "Choose a section:",
-            ["Overview", "Net Worth", "Transactions", "Settings"],
+            ["Overview", "Net Worth", "Portfolio", "Transactions", "Settings"],
             index=0
         )
         
@@ -839,6 +1347,12 @@ def main():
         else:
             st.markdown("**💳 Transactions**: ❌ Not loaded")
         
+        # Portfolio status
+        if 'portfolio_results' in st.session_state:
+            st.markdown("**📊 Portfolio**: ✅ Backtest completed")
+        else:
+            st.markdown("**📊 Portfolio**: ❌ No backtest run")
+        
         st.markdown("---")
         
         # Information section
@@ -847,7 +1361,8 @@ def main():
             **Comprehensive Finance Tool** combines:
             
             - 📈 **Net Worth Tracking**: Monitor your assets across multiple accounts and currencies
-            - 💳 **Transaction Analysis**: Analyze spending patterns from bank statements
+            - � **Portfolio Simulation**: Backtest investment strategies with real Yahoo Finance data
+            - �💳 **Transaction Analysis**: Analyze spending patterns from bank statements
             - 🎯 **Financial Overview**: Get insights into your overall financial health
             
             **Features:**
@@ -863,6 +1378,8 @@ def main():
         overview_dashboard()
     elif page == "Net Worth":
         net_worth_dashboard()
+    elif page == "Portfolio":
+        portfolio_dashboard()
     elif page == "Transactions":
         transaction_analysis_dashboard()
     elif page == "Settings":
