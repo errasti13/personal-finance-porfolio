@@ -898,48 +898,26 @@ def portfolio_dashboard():
                 help="Number of years to simulate forward"
             )
             
-            # Monte Carlo settings
-            num_simulations = st.select_slider(
-                "Simulations:",
-                options=[100, 250, 500, 1000, 2000],
-                value=1000,
-                help="More simulations = more accurate results"
-            )
+            # Monte Carlo settings - hardcoded for optimal performance
+            num_simulations = 250
             
             st.markdown("**💰 Periodic Contributions/Withdrawals:**")
             
-            # Periodic contributions
+            # Periodic contributions/withdrawals
             periodic_contribution = st.number_input(
-                "Monthly Contribution ($):",
-                min_value=0,
+                "Periodic Cash Flow ($):",
+                min_value=-50000,
                 max_value=50000,
                 value=500,
                 step=100,
-                help="Amount to add to portfolio each month"
+                help="Amount to add (+) or withdraw (-) from portfolio. Positive = contributions, Negative = withdrawals"
             )
             
             contribution_frequency = st.selectbox(
-                "Contribution Frequency:",
+                "Cash Flow Frequency:",
                 ["monthly", "quarterly", "yearly"],
                 index=0,
-                help="How often to add money to the portfolio"
-            )
-            
-            # Periodic withdrawals
-            periodic_withdrawal = st.number_input(
-                "Monthly Withdrawal ($):",
-                min_value=0,
-                max_value=50000,
-                value=0,
-                step=100,
-                help="Amount to withdraw from portfolio each month"
-            )
-            
-            withdrawal_frequency = st.selectbox(
-                "Withdrawal Frequency:",
-                ["monthly", "quarterly", "yearly"],
-                index=0,
-                help="How often to withdraw money from the portfolio"
+                help="How often to add or withdraw money from the portfolio"
             )
             
             # Run simulation button
@@ -959,9 +937,7 @@ def portfolio_dashboard():
                 'years_to_project': years_to_project,
                 'num_simulations': num_simulations,
                 'periodic_contribution': periodic_contribution,
-                'contribution_frequency': contribution_frequency,
-                'periodic_withdrawal': periodic_withdrawal,
-                'withdrawal_frequency': withdrawal_frequency
+                'contribution_frequency': contribution_frequency
             }
         
         # Run simulation and show results
@@ -1020,9 +996,7 @@ def portfolio_dashboard():
                     historical_data,
                     settings['initial_investment'],
                     settings.get('periodic_contribution', 0),
-                    settings.get('contribution_frequency', 'monthly'),
-                    settings.get('periodic_withdrawal', 0),
-                    settings.get('withdrawal_frequency', 'monthly')
+                    settings.get('contribution_frequency', 'monthly')
                 )
                 
                 # Calculate backtest metrics
@@ -1045,9 +1019,7 @@ def portfolio_dashboard():
                         settings['num_simulations'],
                         mc_progress_callback,
                         settings.get('periodic_contribution', 0),
-                        settings.get('contribution_frequency', 'monthly'),
-                        settings.get('periodic_withdrawal', 0),
-                        settings.get('withdrawal_frequency', 'monthly')
+                        settings.get('contribution_frequency', 'monthly')
                     )
                     
                     if not mc_results:
@@ -1070,26 +1042,18 @@ def portfolio_dashboard():
                     st.markdown("---")
                     st.markdown("## 🎲 Monte Carlo Simulation Results")
                     
-                    # Calculate expected contributions over projection period
+                    # Calculate expected cash flow over projection period
                     years = settings['years_to_project']
-                    monthly_contrib = settings.get('periodic_contribution', 0)
-                    monthly_withdraw = settings.get('periodic_withdrawal', 0)
+                    periodic_cash_flow = settings.get('periodic_contribution', 0)
                     
                     if settings.get('contribution_frequency', 'monthly') == 'monthly':
-                        total_contrib = monthly_contrib * 12 * years
+                        total_cash_flow = periodic_cash_flow * 12 * years
                     elif settings.get('contribution_frequency', 'monthly') == 'quarterly':
-                        total_contrib = monthly_contrib * 4 * years
+                        total_cash_flow = periodic_cash_flow * 4 * years
                     else:  # yearly
-                        total_contrib = monthly_contrib * years
+                        total_cash_flow = periodic_cash_flow * years
                     
-                    if settings.get('withdrawal_frequency', 'monthly') == 'monthly':
-                        total_withdraw = monthly_withdraw * 12 * years
-                    elif settings.get('withdrawal_frequency', 'monthly') == 'quarterly':
-                        total_withdraw = monthly_withdraw * 4 * years
-                    else:  # yearly
-                        total_withdraw = monthly_withdraw * years
-                    
-                    expected_invested = settings['initial_investment'] + total_contrib - total_withdraw
+                    expected_invested = settings['initial_investment'] + total_cash_flow
                     
                     # Monte Carlo results - focusing on best and worst case scenarios
                     st.markdown(f"**Portfolio Projections after {years} years ({settings['num_simulations']:,} simulations):**")
@@ -1212,29 +1176,21 @@ def portfolio_dashboard():
                             fill=None
                         ))
                         
-                        # Add total invested reference line (if contributions/withdrawals exist)
-                        if settings.get('periodic_contribution', 0) > 0 or settings.get('periodic_withdrawal', 0) > 0:
+                        # Add total invested reference line (if cash flow exists)
+                        if settings.get('periodic_contribution', 0) != 0:
                             # Calculate cumulative investment over time
                             time_years = mc_results['time_axis']
                             cumulative_invested = []
                             
                             for t in time_years:
                                 if settings.get('contribution_frequency', 'monthly') == 'monthly':
-                                    contrib_per_year = settings.get('periodic_contribution', 0) * 12
+                                    cash_flow_per_year = settings.get('periodic_contribution', 0) * 12
                                 elif settings.get('contribution_frequency', 'monthly') == 'quarterly':
-                                    contrib_per_year = settings.get('periodic_contribution', 0) * 4
+                                    cash_flow_per_year = settings.get('periodic_contribution', 0) * 4
                                 else:  # yearly
-                                    contrib_per_year = settings.get('periodic_contribution', 0)
+                                    cash_flow_per_year = settings.get('periodic_contribution', 0)
                                 
-                                if settings.get('withdrawal_frequency', 'monthly') == 'monthly':
-                                    withdraw_per_year = settings.get('periodic_withdrawal', 0) * 12
-                                elif settings.get('withdrawal_frequency', 'monthly') == 'quarterly':
-                                    withdraw_per_year = settings.get('periodic_withdrawal', 0) * 4
-                                else:  # yearly
-                                    withdraw_per_year = settings.get('periodic_withdrawal', 0)
-                                
-                                net_per_year = contrib_per_year - withdraw_per_year
-                                total_invested_at_time = settings['initial_investment'] + (net_per_year * t)
+                                total_invested_at_time = settings['initial_investment'] + (cash_flow_per_year * t)
                                 cumulative_invested.append(max(0, total_invested_at_time))
                             
                             fig_evolution.add_trace(go.Scatter(
@@ -1263,7 +1219,7 @@ def portfolio_dashboard():
                         - 🟢 **Green line**: Best case scenario - an actual simulated path that ended in the 95th percentile
                         - 🔵 **Blue line**: Median case scenario - an actual simulated path that ended near the median
                         - 🔴 **Red line**: Worst case scenario - an actual simulated path that ended in the 5th percentile
-                        - 🟠 **Orange dotted line**: Total amount of money you would have invested over time (including contributions)
+                        - 🟠 **Orange dotted line**: Total amount of money invested over time (positive cash flow adds, negative withdraws)
                         
                         These are real portfolio trajectories from the Monte Carlo simulation, showing how your portfolio value could evolve over time with daily market movements.
                         """)
