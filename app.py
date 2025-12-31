@@ -1109,14 +1109,17 @@ def portfolio_dashboard():
                         worst_case_gain = worst_case_value - expected_invested
                         worst_case_return = (worst_case_gain / expected_invested * 100) if expected_invested > 0 else 0
                         
+                        # Determine if it's a loss or gain
+                        result_type = "Loss" if worst_case_gain < 0 else "Gain"
+                        
                         st.markdown("""
                         <div style="padding: 1rem; border-radius: 10px; background-color: #dc3545; color: white; text-align: center;">
                             <h3>⚠️ Worst Case Scenario</h3>
                             <h2>${:,.0f}</h2>
                             <p>5th Percentile</p>
-                            <p>Loss: ${:,.0f} ({:.1f}%)</p>
+                            <p>{}: ${:,.0f} ({:.1f}%)</p>
                         </div>
-                        """.format(worst_case_value, abs(worst_case_gain), abs(worst_case_return)), unsafe_allow_html=True)
+                        """.format(worst_case_value, result_type, abs(worst_case_gain), abs(worst_case_return)), unsafe_allow_html=True)
                     
                     # Additional summary metrics
                     st.markdown("---")
@@ -1145,11 +1148,11 @@ def portfolio_dashboard():
                         )
                     
                     with col4:
-                        prob_loss = sum(1 for x in mc_results['all_results'] if x < settings['initial_investment']) / len(mc_results['all_results']) * 100
+                        prob_loss = sum(1 for x in mc_results['all_results'] if x < expected_invested) / len(mc_results['all_results']) * 100
                         st.metric(
                             "Probability of Loss",
                             f"{prob_loss:.1f}%",
-                            help="Chance of losing initial investment"
+                            help="Chance of ending below total invested amount"
                         )
                     
                     # Portfolio Evolution Chart
