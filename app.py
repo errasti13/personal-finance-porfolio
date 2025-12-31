@@ -909,6 +909,42 @@ def portfolio_dashboard():
                 index=0
             )
             
+            st.markdown("**💰 Periodic Contributions/Withdrawals:**")
+            
+            # Periodic contributions
+            periodic_contribution = st.number_input(
+                "Monthly Contribution ($):",
+                min_value=0,
+                max_value=50000,
+                value=0,
+                step=100,
+                help="Amount to add to portfolio each month (e.g., salary investment)"
+            )
+            
+            contribution_frequency = st.selectbox(
+                "Contribution Frequency:",
+                ["monthly", "quarterly", "yearly"],
+                index=0,
+                help="How often to add money to the portfolio"
+            )
+            
+            # Periodic withdrawals
+            periodic_withdrawal = st.number_input(
+                "Monthly Withdrawal ($):",
+                min_value=0,
+                max_value=50000,
+                value=0,
+                step=100,
+                help="Amount to withdraw from portfolio each month (e.g., retirement income)"
+            )
+            
+            withdrawal_frequency = st.selectbox(
+                "Withdrawal Frequency:",
+                ["monthly", "quarterly", "yearly"],
+                index=0,
+                help="How often to withdraw money from the portfolio"
+            )
+            
             # Run backtest button
             run_backtest = st.button(
                 "🚀 Run Backtest",
@@ -925,7 +961,11 @@ def portfolio_dashboard():
                 'start_date': start_date.strftime('%Y-%m-%d'),
                 'end_date': end_date.strftime('%Y-%m-%d'),
                 'initial_investment': initial_investment,
-                'rebalance_freq': rebalance_freq
+                'rebalance_freq': rebalance_freq,
+                'periodic_contribution': periodic_contribution,
+                'contribution_frequency': contribution_frequency,
+                'periodic_withdrawal': periodic_withdrawal,
+                'withdrawal_frequency': withdrawal_frequency
             }
     
     with tab2:
@@ -961,7 +1001,11 @@ def portfolio_dashboard():
                     settings['allocations'],
                     historical_data,
                     settings['initial_investment'],
-                    settings['rebalance_freq']
+                    settings['rebalance_freq'],
+                    settings.get('periodic_contribution', 0),
+                    settings.get('contribution_frequency', 'monthly'),
+                    settings.get('periodic_withdrawal', 0),
+                    settings.get('withdrawal_frequency', 'monthly')
                 )
                 
                 # Calculate metrics
@@ -1023,6 +1067,45 @@ def portfolio_dashboard():
                             f"+{metrics.get('Best Day (%)', 0):.1f}% / {metrics.get('Worst Day (%)', 0):.1f}%",
                             help="Best and worst single day returns"
                         )
+                    
+                    # Show contribution metrics if applicable
+                    if any(key in metrics for key in ['Total Contributions', 'Total Withdrawals', 'Net Contributions']):
+                        st.markdown("---")
+                        st.markdown("**💰 Contribution Summary:**")
+                        
+                        col1_contrib, col2_contrib, col3_contrib = st.columns(3)
+                        
+                        with col1_contrib:
+                            if 'Total Contributions' in metrics:
+                                st.metric(
+                                    "Total Contributed",
+                                    f"${metrics.get('Total Contributions', 0):,.0f}",
+                                    help="Total amount invested over time"
+                                )
+                        
+                        with col2_contrib:
+                            if 'Total Withdrawals' in metrics:
+                                st.metric(
+                                    "Total Withdrawn", 
+                                    f"${metrics.get('Total Withdrawals', 0):,.0f}",
+                                    help="Total amount withdrawn over time"
+                                )
+                        
+                        with col3_contrib:
+                            if 'Net Contributions' in metrics:
+                                st.metric(
+                                    "Net Invested",
+                                    f"${metrics.get('Net Contributions', 0):,.0f}",
+                                    help="Net amount invested (contributions minus withdrawals)"
+                                )
+                        
+                        # Show money-weighted vs time-weighted returns
+                        if 'Time-Weighted Return (%)' in metrics:
+                            st.info(f"""
+                            **Return Comparison:**
+                            - Time-Weighted Return: {metrics.get('Time-Weighted Return (%)', 0):.2f}% (portfolio performance)
+                            - Money-Weighted Return: {metrics.get('Total Return (%)', 0):.2f}% (your actual experience)
+                            """)
                     
                     # Portfolio value chart
                     st.markdown("**📈 Portfolio Growth:**")

@@ -102,7 +102,11 @@ class PortfolioSimulator:
     def calculate_portfolio_returns(self, allocations: Dict[str, float], 
                                   data: Dict[str, pd.DataFrame],
                                   initial_investment: float = 10000,
-                                  rebalance_frequency: str = 'monthly') -> pd.DataFrame:
+                                  rebalance_frequency: str = 'monthly',
+                                  periodic_contribution: float = 0,
+                                  contribution_frequency: str = 'monthly',
+                                  periodic_withdrawal: float = 0,
+                                  withdrawal_frequency: str = 'monthly') -> pd.DataFrame:
         """
         Calculate portfolio returns based on allocations and historical data.
         
@@ -111,6 +115,10 @@ class PortfolioSimulator:
             data: Historical data for each ticker
             initial_investment: Starting portfolio value
             rebalance_frequency: 'daily', 'weekly', 'monthly', 'quarterly', 'yearly', or 'none'
+            periodic_contribution: Amount to add to portfolio periodically (positive number)
+            contribution_frequency: How often to add money ('daily', 'weekly', 'monthly', 'quarterly', 'yearly')
+            periodic_withdrawal: Amount to withdraw from portfolio periodically (positive number)
+            withdrawal_frequency: How often to withdraw money ('daily', 'weekly', 'monthly', 'quarterly', 'yearly')
             
         Returns:
             DataFrame with portfolio performance metrics
@@ -149,9 +157,13 @@ class PortfolioSimulator:
         # Calculate returns
         returns = prices.pct_change().fillna(0)
         
-        # Initialize portfolio
+        # Initialize portfolio tracking
         portfolio_value = pd.Series(index=prices.index, dtype=float)
         portfolio_value.iloc[0] = initial_investment
+        total_contributions = pd.Series(index=prices.index, dtype=float)
+        total_contributions.iloc[0] = initial_investment
+        total_withdrawals = pd.Series(index=prices.index, dtype=float)
+        total_withdrawals.iloc[0] = 0
         
         # Calculate shares based on initial allocation
         shares = {}
@@ -162,33 +174,91 @@ class PortfolioSimulator:
         # Calculate portfolio value over time
         for i in range(1, len(prices)):
             date = prices.index[i]
+            previous_date = prices.index[i-1]
             
-            # Check if rebalancing is needed
-            should_rebalance = self._should_rebalance(date, prices.index[i-1], rebalance_frequency)
+            # Check for periodic contributions
+            contribution_amount = 0
+            if periodic_contribution > 0:
+                if self._should_add_money(date, previous_date, contribution_frequency):
+                    contribution_amount = periodic_contribution
             
-            if should_rebalance and rebalance_frequency != 'none':
-                # Rebalance: recalculate shares based on current portfolio value
-                current_value = portfolio_value.iloc[i-1]
+            # Check for periodic withdrawals
+            withdrawal_amount = 0
+            if periodic_withdrawal > 0:
+                if self._should_add_money(date, previous_date, withdrawal_frequency):
+                    withdrawal_amount = periodic_withdrawal
+            
+            # Apply contribution/withdrawal before market movements
+            previous_value = portfolio_value.iloc[i-1]
+            adjusted_value = previous_value + contribution_amount - withdrawal_amount
+            
+            # Update shares if money was added or withdrawn
+            if contribution_amount > 0 or withdrawal_amount > 0:
+                # Redistribute the adjusted portfolio value according to allocations
                 for ticker in valid_tickers:
-                    allocation_amount = current_value * allocations[ticker] / 100
+                    allocation_amount = adjusted_value * allocations[ticker] / 100
                     shares[ticker] = allocation_amount / prices[ticker].iloc[i-1]
             
-            # Calculate current portfolio value
+            # Check if rebalancing is needed
+            should_rebalance = self._should_rebalance(date, previous_date, rebalance_frequency)
+            
+            if should_rebalance and rebalance_frequency != 'none':
+                # Rebalance: recalculate shares based on current adjusted portfolio value
+                for ticker in valid_tickers:
+                    allocation_amount = adjusted_value * allocations[ticker] / 100
+                    shares[ticker] = allocation_amount / prices[ticker].iloc[i-1]
+            
+            # Calculate current portfolio value after market movements
             current_value = sum(shares[ticker] * prices[ticker].iloc[i] for ticker in valid_tickers)
             portfolio_value.iloc[i] = current_value
+            
+            # Track cumulative contributions and withdrawals
+            total_contributions.iloc[i] = total_contributions.iloc[i-1] + contribution_amount
+            total_withdrawals.iloc[i] = total_withdrawals.iloc[i-1] + withdrawal_amount
+        
+        # Calculate net contributions (total money invested)
+        net_contributions = total_contributions - total_withdrawals
         
         # Create results DataFrame
         results = pd.DataFrame({
             'Date': prices.index,
             'Portfolio_Value': portfolio_value.values,
             'Daily_Return': portfolio_value.pct_change().fillna(0),
-            'Cumulative_Return': ((portfolio_value / initial_investment - 1) * 100)
+            'Cumulative_Return': ((portfolio_value / net_contributions - 1) * 100),
+            'Total_Contributions': total_contributions.values,
+            'Total_Withdrawals': total_withdrawals.values,
+            'Net_Contributions': net_contributions.values
         })
         
-        # Add individual asset values for comparison
+        # Add individual asset values for comparison (buy and hold with same contribution pattern)
         for ticker in valid_tickers:
-            asset_value = initial_investment * (prices[ticker] / prices[ticker].iloc[0])
-            results[f'{ticker}_Value'] = asset_value.values
+            # Calculate what this asset would be worth with the same contribution pattern
+            asset_shares = 0
+            asset_value_series = pd.Series(index=prices.index, dtype=float)
+            asset_value_series.iloc[0] = initial_investment * allocations[ticker] / 100
+            asset_shares = asset_value_series.iloc[0] / prices[ticker].iloc[0]
+            
+            for i in range(1, len(prices)):
+                date = prices.index[i]
+                previous_date = prices.index[i-1]
+                
+                # Add contributions to this asset
+                contribution_amount = 0
+                if periodic_contribution > 0:
+                    if self._should_add_money(date, previous_date, contribution_frequency):
+                        contribution_amount = periodic_contribution * allocations[ticker] / 100
+                        asset_shares += contribution_amount / prices[ticker].iloc[i-1]
+                
+                # Subtract withdrawals from this asset
+                withdrawal_amount = 0
+                if periodic_withdrawal > 0:
+                    if self._should_add_money(date, previous_date, withdrawal_frequency):
+                        withdrawal_amount = periodic_withdrawal * allocations[ticker] / 100
+                        asset_shares -= withdrawal_amount / prices[ticker].iloc[i-1]
+                
+                asset_value_series.iloc[i] = asset_shares * prices[ticker].iloc[i]
+            
+            results[f'{ticker}_Value'] = asset_value_series.values
         
         return results
     
@@ -206,6 +276,22 @@ class PortfolioSimulator:
         elif frequency == 'yearly':
             return current_date.year != previous_date.year
         else:  # 'none'
+            return False
+    
+    def _should_add_money(self, current_date: pd.Timestamp, previous_date: pd.Timestamp, 
+                         frequency: str) -> bool:
+        """Check if money should be added/withdrawn based on frequency."""
+        if frequency == 'daily':
+            return True
+        elif frequency == 'weekly':
+            return current_date.week != previous_date.week
+        elif frequency == 'monthly':
+            return current_date.month != previous_date.month
+        elif frequency == 'quarterly':
+            return (current_date.month - 1) // 3 != (previous_date.month - 1) // 3
+        elif frequency == 'yearly':
+            return current_date.year != previous_date.year
+        else:
             return False
     
     def calculate_metrics(self, results: pd.DataFrame) -> Dict:
@@ -227,8 +313,24 @@ class PortfolioSimulator:
         if len(returns) == 0:
             return {}
         
-        # Calculate metrics
-        total_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0] - 1) * 100
+        # Get contribution data if available
+        net_contributions = results.get('Net_Contributions', portfolio_values.iloc[0])
+        total_contributions = results.get('Total_Contributions', portfolio_values.iloc[0])
+        total_withdrawals = results.get('Total_Withdrawals', 0)
+        
+        # Calculate metrics accounting for contributions
+        if isinstance(net_contributions, pd.Series):
+            # Money-weighted return (IRR approximation)
+            final_value = portfolio_values.iloc[-1]
+            total_invested = net_contributions.iloc[-1]
+            total_return = (final_value / total_invested - 1) * 100 if total_invested > 0 else 0
+            
+            # Time-weighted return (more accurate for performance measurement)
+            time_weighted_return = results['Cumulative_Return'].iloc[-1] if 'Cumulative_Return' in results.columns else total_return
+        else:
+            total_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0] - 1) * 100
+            time_weighted_return = total_return
+        
         annualized_return = ((portfolio_values.iloc[-1] / portfolio_values.iloc[0]) ** 
                            (252 / len(returns)) - 1) * 100
         
@@ -251,8 +353,9 @@ class PortfolioSimulator:
         total_days = len(returns)
         win_rate = (positive_days / total_days) * 100 if total_days > 0 else 0
         
-        return {
+        metrics = {
             'Total Return (%)': round(total_return, 2),
+            'Time-Weighted Return (%)': round(time_weighted_return, 2) if 'time_weighted_return' in locals() else round(total_return, 2),
             'Annualized Return (%)': round(annualized_return, 2),
             'Volatility (%)': round(volatility, 2),
             'Sharpe Ratio': round(sharpe_ratio, 2),
@@ -263,6 +366,14 @@ class PortfolioSimulator:
             'Total Days': total_days,
             'Final Value': round(portfolio_values.iloc[-1], 2) if not portfolio_values.empty else 0
         }
+        
+        # Add contribution-related metrics if available
+        if isinstance(total_contributions, pd.Series):
+            metrics['Total Contributions'] = round(total_contributions.iloc[-1], 2)
+            metrics['Total Withdrawals'] = round(total_withdrawals.iloc[-1], 2)
+            metrics['Net Contributions'] = round(net_contributions.iloc[-1], 2)
+            
+        return metrics
     
     def monte_carlo_simulation(self, allocations: Dict[str, float], 
                              data: Dict[str, pd.DataFrame],
