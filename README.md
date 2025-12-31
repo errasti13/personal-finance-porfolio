@@ -11,7 +11,16 @@ A powerful, all-in-one financial management application built with Streamlit tha
 - **Account Breakdown**: See how your wealth is distributed across different accounts
 - **Data Management**: Import/export data, manual entry, and persistent storage
 
-### 💳 Transaction Analysis
+### � Portfolio Simulation & Backtesting
+- **Multi-Asset Support**: Test portfolios with stocks, ETFs, commodities, bonds, and crypto
+- **Yahoo Finance Integration**: Real-time data from 20+ major asset classes
+- **Historical Backtesting**: Test investment strategies with up to 50+ years of historical data
+- **Monte Carlo Simulations**: Project future portfolio performance with statistical modeling
+- **Portfolio Optimization**: Get suggestions for optimal asset allocation
+- **Risk Analysis**: Correlation matrices, volatility metrics, and drawdown analysis
+- **Rebalancing Strategies**: Test different rebalancing frequencies (monthly, quarterly, yearly)
+
+### �💳 Transaction Analysis
 - **PDF Processing**: Automatically extract transactions from bank statement PDFs (UBS and other formats)
 - **CSV Import**: Load transaction data from CSV files
 - **Smart Categorization**: Automatic categorization of transactions with customizable categories
@@ -163,7 +172,53 @@ comprehensive-finance-tool/
 3. Check financial health indicators
 4. Monitor savings rate and growth trends
 
-## 🛠️ Customization
+## � Available Portfolio Assets
+
+The portfolio simulator supports 20+ asset classes via Yahoo Finance:
+
+### 📈 Stock Market Indices
+| Asset | Ticker | Coverage |
+|-------|--------|----------|
+| S&P 500 | ^GSPC | US Large Cap |
+| NASDAQ | ^IXIC | US Tech Heavy |
+| Dow Jones | ^DJI | US Blue Chip |
+| Russell 2000 | ^RUT | US Small Cap |
+| EuroStoxx 50 | ^STOXX50E | European Stocks |
+| FTSE 100 | ^FTSE | UK Stocks |
+| Nikkei 225 | ^N225 | Japanese Stocks |
+
+### 🌍 Global & Sector ETFs
+| Asset | Ticker | Coverage |
+|-------|--------|----------|
+| MSCI World | URTH | Global Developed Markets |
+| MSCI Emerging Markets | EEM | Emerging Markets |
+| Total Stock Market | VTI | US Total Market |
+| S&P 500 ETF | VOO | US Large Cap ETF |
+| Developed Markets | VEA | International Developed |
+| Emerging Markets | VWO | International Emerging |
+
+### 🏅 Commodities & Alternative Assets
+| Asset | Ticker | Coverage |
+|-------|--------|----------|
+| Gold | GC=F | Precious Metals |
+| Silver | SI=F | Precious Metals |
+| Oil (Crude) | CL=F | Energy Commodities |
+
+### 💰 Cryptocurrencies
+| Asset | Ticker | Coverage |
+|-------|--------|----------|
+| Bitcoin | BTC-USD | Digital Currency |
+| Ethereum | ETH-USD | Digital Currency |
+
+### 🏦 Bonds & Fixed Income
+| Asset | Ticker | Coverage |
+|-------|--------|----------|
+| 10-Year Treasury | ^TNX | US Government Bonds |
+| Total Bond Market | BND | US Bond Market ETF |
+
+All data is sourced from Yahoo Finance with historical data going back 20-50+ years depending on the asset.
+
+## �🛠️ Customization
 
 ### Adding New Transaction Categories
 Edit the `categorize_transactions` method in `modules/transaction_analyzer.py` to add custom category rules.
