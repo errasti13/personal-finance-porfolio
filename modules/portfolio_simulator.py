@@ -438,14 +438,15 @@ class PortfolioSimulator:
                              data: Dict[str, pd.DataFrame],
                              initial_investment: float = 10000,
                              years: int = 10, 
-                             simulations: int = 1000,
+                             simulations: int = 10000,
                              progress_callback=None,
                              periodic_contribution: float = 0,
                              contribution_frequency: str = 'monthly',
                              periodic_withdrawal: float = 0,
                              withdrawal_frequency: str = 'monthly') -> Dict:
         """
-        Run Monte Carlo simulation for portfolio projections.
+        Run Monte Carlo simulation using the exact logic from portfolio-tester.
+        Uses monthly returns for more realistic portfolio simulation.
         
         Args:
             allocations: Dictionary with ticker as key and allocation percentage as value
@@ -455,172 +456,172 @@ class PortfolioSimulator:
             simulations: Number of simulation runs
             progress_callback: Optional callback for progress updates
             periodic_contribution: Amount to contribute periodically
-            contribution_frequency: How often to contribute ('monthly', 'quarterly', 'yearly')
-            periodic_withdrawal: Amount to withdraw periodically
-            withdrawal_frequency: How often to withdraw ('monthly', 'quarterly', 'yearly')
+            contribution_frequency: How often to contribute ('monthly', 'yearly')
+            periodic_withdrawal: Amount to withdraw periodically  
+            withdrawal_frequency: How often to withdraw ('monthly', 'yearly')
             
         Returns:
-            Dictionary with simulation results
+            Dictionary with simulation results including best/worst/median scenarios
         """
         if not allocations or not data:
             return {}
         
-        # Calculate historical returns for each asset and create return matrix
-        returns_data = {}
+        # Convert daily data to monthly data for each asset
+        monthly_data = {}
+        monthly_returns = {}
         valid_tickers = []
-        allocation_weights = []
         
-        # First pass: collect all returns data and find common date range
-        all_dates = None
         for ticker, allocation in allocations.items():
             if ticker in data and not data[ticker].empty and allocation > 0:
                 prices = data[ticker]['Close'].dropna()
                 if len(prices) > 1:
-                    returns = prices.pct_change().dropna()
-                    returns_data[ticker] = returns
-                    valid_tickers.append(ticker)
-                    allocation_weights.append(allocation / 100)
+                    # Convert to monthly data (use last trading day of each month)
+                    monthly_prices = prices.resample('ME').last().dropna()
                     
-                    # Find common date range
-                    if all_dates is None:
-                        all_dates = returns.index
-                    else:
-                        all_dates = all_dates.intersection(returns.index)
+                    if len(monthly_prices) > 1:
+                        # Calculate true monthly returns (accounting for compounding)
+                        monthly_return_series = monthly_prices.pct_change().dropna()
+                        
+                        monthly_data[ticker] = monthly_prices
+                        monthly_returns[ticker] = monthly_return_series.values
+                        valid_tickers.append(ticker)
         
-        if not valid_tickers or all_dates is None or len(all_dates) == 0:
+        if not valid_tickers:
             return {}
         
-        # Second pass: create aligned returns matrix using common dates
-        returns_matrix = []
-        for ticker in valid_tickers:
-            aligned_returns = returns_data[ticker].reindex(all_dates).fillna(0).values
-            returns_matrix.append(aligned_returns)
+        # Find minimum data points across all assets
+        min_data_points = min(len(monthly_returns[ticker]) for ticker in valid_tickers)
+        simulation_length_months = years * 12
         
-        # Convert to numpy arrays for vectorization
-        returns_matrix = np.array(returns_matrix)  # Shape: (n_assets, n_common_days)
-        allocation_weights = np.array(allocation_weights)  # Shape: (n_assets,)
-        
-        # Calculate contribution/withdrawal schedules
-        trading_days = years * 252
-        contributions_per_year = {'monthly': 12, 'quarterly': 4, 'yearly': 1}
-        withdrawals_per_year = {'monthly': 12, 'quarterly': 4, 'yearly': 1}
-        
-        contrib_freq = contributions_per_year.get(contribution_frequency, 12)
-        withdraw_freq = withdrawals_per_year.get(withdrawal_frequency, 12)
-        
-        # Create cash flow schedule arrays
-        contrib_schedule = np.zeros(trading_days)
-        withdraw_schedule = np.zeros(trading_days)
-        
-        if periodic_contribution > 0 and contrib_freq > 0:
-            contrib_days = 252 // contrib_freq
-            for day in range(contrib_days, trading_days, contrib_days):
-                contrib_schedule[day] = periodic_contribution
-        
-        if periodic_withdrawal > 0 and withdraw_freq > 0:
-            withdraw_days = 252 // withdraw_freq
-            for day in range(withdraw_days, trading_days, withdraw_days):
-                withdraw_schedule[day] = periodic_withdrawal
-        
-        # Vectorized simulation - generate all random returns at once
-        n_assets, n_historical_returns = returns_matrix.shape
-        
-        if n_historical_returns == 0:
+        if min_data_points < simulation_length_months:
             return {}
         
-        # Generate random indices for all simulations and days at once
-        # Shape: (simulations, trading_days, n_assets)
-        random_indices = np.random.randint(0, n_historical_returns, size=(simulations, trading_days, n_assets))
+        # Simulation parameters
+        months_per_year = 12
+        contribution_interval = 1 if contribution_frequency == 'monthly' else 12
+        withdrawal_interval = 1 if withdrawal_frequency == 'monthly' else 12
         
-        # Sample returns using advanced indexing
-        # Shape: (simulations, trading_days, n_assets)
-        sampled_returns = returns_matrix[np.arange(n_assets)[None, None, :], random_indices]
+        # Net periodic cash flow
+        net_periodic_flow = periodic_contribution - periodic_withdrawal
         
-        # Calculate weighted portfolio returns for all simulations
-        # Shape: (simulations, trading_days)
-        portfolio_daily_returns = np.sum(sampled_returns * allocation_weights[None, None, :], axis=2)
+        # Run simulations
+        all_simulations = []
+        small_value_threshold = 0.01
         
-        # Pre-compute net cash flows for efficiency
-        net_cashflow = contrib_schedule - withdraw_schedule  # Shape: (trading_days,)
-        
-        # Memory-efficient vectorized simulation
-        all_time_series = []  # Store time series for best/worst case analysis
-        
-        if periodic_contribution == 0 and periodic_withdrawal == 0:
-            # No cash flows - ultra-fast pure vectorized calculation
-            if progress_callback:
-                progress_callback(1, 2)
-            
-            daily_multipliers = 1 + portfolio_daily_returns  # Shape: (simulations, trading_days)
-            
-            # Calculate cumulative portfolio values for all simulations
-            portfolio_time_series = np.zeros((simulations, trading_days + 1))
-            portfolio_time_series[:, 0] = initial_investment
-            
-            for day in range(trading_days):
-                portfolio_time_series[:, day + 1] = portfolio_time_series[:, day] * (1 + portfolio_daily_returns[:, day])
-            
-            final_values = portfolio_time_series[:, -1]
-            all_time_series = portfolio_time_series
-            
-            if progress_callback:
-                progress_callback(2, 2)
-            
-        else:
-            # With cash flows - optimized loop with memory efficiency
-            # For time series, we need to store more data, so use smaller chunks
-            chunk_size = min(simulations, 1000)  # Smaller chunks due to memory requirements
-            all_final_values = []
-            
-            for chunk_start in range(0, simulations, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, simulations)
-                chunk_sims = chunk_end - chunk_start
+        for sim_idx in range(simulations):
+            try:
+                # Random starting point in historical data
+                start_idx = np.random.randint(0, min_data_points - simulation_length_months)
                 
-                # Initialize values for this chunk
-                portfolio_values = np.zeros((chunk_sims, trading_days + 1))
-                portfolio_values[:, 0] = initial_investment
+                # Initialize simulation state
+                portfolio_value = initial_investment
+                total_invested = initial_investment
+                is_portfolio_active = True
+                value_history = []
                 
-                # Get returns for this chunk
-                chunk_returns = portfolio_daily_returns[chunk_start:chunk_end]
+                # Track investments for better return calculation
+                investments = [{'amount': initial_investment, 'months_invested': simulation_length_months}]
                 
-                # Simulate this chunk
-                for day in range(trading_days):
-                    current_values = portfolio_values[:, day]
+                # Simulate each month
+                for month in range(simulation_length_months):
+                    if is_portfolio_active:
+                        # Calculate weighted portfolio return for this month
+                        monthly_portfolio_return = 0.0
+                        for ticker in valid_tickers:
+                            asset_return = monthly_returns[ticker][start_idx + month]
+                            weight = allocations[ticker] / 100
+                            monthly_portfolio_return += asset_return * weight
+                        
+                        # Apply return to current portfolio value
+                        portfolio_value *= (1 + monthly_portfolio_return)
+                        
+                        # Handle periodic contributions/withdrawals
+                        if month % contribution_interval == 0 and periodic_contribution != 0:
+                            portfolio_value += periodic_contribution
+                            if periodic_contribution > 0:
+                                total_invested += periodic_contribution
+                                investments.append({
+                                    'amount': periodic_contribution,
+                                    'months_invested': simulation_length_months - month
+                                })
+                        
+                        if month % withdrawal_interval == 0 and periodic_withdrawal != 0:
+                            portfolio_value -= periodic_withdrawal
+                        
+                        # Check for portfolio depletion
+                        if portfolio_value < small_value_threshold:
+                            portfolio_value = 0
+                            is_portfolio_active = False
                     
-                    # Apply cash flows
-                    if net_cashflow[day] != 0:
-                        current_values = np.maximum(0, current_values + net_cashflow[day])
-                    
-                    # Apply market returns
-                    portfolio_values[:, day + 1] = current_values * (1 + chunk_returns[:, day])
+                    # Record monthly value
+                    value_history.append(portfolio_value)
                 
-                all_final_values.extend(portfolio_values[:, -1])
+                # Calculate returns
+                total_return = (portfolio_value / total_invested - 1) if total_invested > 0 else -1
+                annualized_return = (1 + total_return) ** (1 / years) - 1
                 
-                # Store time series for this chunk
-                if len(all_time_series) == 0:
-                    all_time_series = portfolio_values
-                else:
-                    all_time_series = np.vstack([all_time_series, portfolio_values])
+                # Calculate maximum drawdown
+                max_drawdown = 0.0
+                if value_history:
+                    peak = value_history[0]
+                    for value in value_history:
+                        if value > peak:
+                            peak = value
+                        if peak > 0:
+                            drawdown = (peak - value) / peak
+                            max_drawdown = max(max_drawdown, drawdown)
                 
-                # Progress callback
-                if progress_callback:
-                    progress_callback(chunk_end, simulations)
+                # Find portfolio depletion month (if any)
+                depletion_month = None
+                if not is_portfolio_active:
+                    try:
+                        depletion_month = next(i for i, v in enumerate(value_history) if v == 0)
+                    except StopIteration:
+                        pass
+                
+                # Store simulation result
+                simulation_result = {
+                    'total_return': total_return * 100,
+                    'annualized_return': annualized_return * 100,
+                    'initial_investment': initial_investment,
+                    'total_invested': total_invested,
+                    'final_value': portfolio_value,
+                    'value_history': value_history,
+                    'max_drawdown': max_drawdown * 100,
+                    'portfolio_depletion_month': depletion_month,
+                    'is_active': is_portfolio_active
+                }
+                
+                all_simulations.append(simulation_result)
+                
+            except Exception as e:
+                continue  # Skip failed simulations
             
-            final_values = np.array(all_final_values)
+            # Progress callback
+            if progress_callback and (sim_idx + 1) % 100 == 0:
+                progress_callback(sim_idx + 1, simulations)
         
-        # Ensure non-negative values
-        final_values = np.maximum(0, final_values)
-        all_time_series = np.maximum(0, all_time_series)
+        if not all_simulations:
+            return {}
         
-        # Find best and worst case time series
-        best_case_idx = np.argmax(final_values)
-        worst_case_idx = np.argmin(final_values)
-        median_idx = np.argpartition(final_values, len(final_values)//2)[len(final_values)//2]
+        # Sort by total return
+        all_simulations.sort(key=lambda x: x['total_return'], reverse=True)
+        
+        # Calculate statistics
+        best_case = all_simulations[0]
+        worst_case = all_simulations[-1]
+        median_idx = len(all_simulations) // 2
+        median_case = all_simulations[median_idx]
+        
+        # Success rate (portfolios that didn't deplete)
+        success_rate = len([s for s in all_simulations if s['is_active']]) / len(all_simulations) * 100
         
         # Create time axis (in years)
-        time_axis = np.linspace(0, years, trading_days + 1)
+        time_axis = np.linspace(0, years, simulation_length_months)
         
-        # Calculate statistics from vectorized results
+        # Extract final values for distribution statistics
+        final_values = [s['final_value'] for s in all_simulations]
+        
         return {
             'mean': np.mean(final_values),
             'median': np.median(final_values),
@@ -631,11 +632,30 @@ class PortfolioSimulator:
             'percentile_95': np.percentile(final_values, 95),
             'min': np.min(final_values),
             'max': np.max(final_values),
-            'all_results': final_values.tolist(),
+            'success_rate': success_rate,
+            'total_simulations': len(all_simulations),
             'time_axis': time_axis.tolist(),
-            'best_case_series': all_time_series[best_case_idx].tolist(),
-            'worst_case_series': all_time_series[worst_case_idx].tolist(),
-            'median_case_series': all_time_series[median_idx].tolist()
+            'best_case_series': best_case['value_history'],
+            'worst_case_series': worst_case['value_history'],
+            'median_case_series': median_case['value_history'],
+            'best_case': {
+                'total_return': best_case['total_return'],
+                'annualized_return': best_case['annualized_return'],
+                'final_value': best_case['final_value'],
+                'max_drawdown': best_case['max_drawdown']
+            },
+            'worst_case': {
+                'total_return': worst_case['total_return'],
+                'annualized_return': worst_case['annualized_return'],
+                'final_value': worst_case['final_value'],
+                'max_drawdown': worst_case['max_drawdown']
+            },
+            'median_case': {
+                'total_return': median_case['total_return'],
+                'annualized_return': median_case['annualized_return'],
+                'final_value': median_case['final_value'],
+                'max_drawdown': median_case['max_drawdown']
+            }
         }
     
     def get_asset_correlation(self, tickers: List[str], data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
