@@ -219,12 +219,43 @@ class PortfolioSimulator:
         # Calculate net contributions (total money invested)
         net_contributions = total_contributions - total_withdrawals
         
+        # Calculate time-weighted return (pure portfolio performance)
+        # This measures how well the portfolio strategy performed, independent of contribution timing
+        time_weighted_returns = []
+        for i in range(1, len(prices)):
+            previous_value = portfolio_value.iloc[i-1]
+            current_value_before_flows = previous_value
+            
+            # Check for contributions/withdrawals today
+            contribution_amount = 0
+            withdrawal_amount = 0
+            if periodic_contribution > 0:
+                if self._should_add_money(prices.index[i], prices.index[i-1], contribution_frequency):
+                    contribution_amount = periodic_contribution
+            if periodic_withdrawal > 0:
+                if self._should_add_money(prices.index[i], prices.index[i-1], withdrawal_frequency):
+                    withdrawal_amount = periodic_withdrawal
+            
+            # Adjust for flows to get the value after flows but before market movement
+            value_after_flows = previous_value + contribution_amount - withdrawal_amount
+            
+            # Calculate the return due to market movement only
+            if value_after_flows > 0:
+                market_return = (portfolio_value.iloc[i] - value_after_flows) / value_after_flows
+                time_weighted_returns.append(market_return)
+        
+        # Compound the time-weighted returns
+        time_weighted_cumulative = 1.0
+        for ret in time_weighted_returns:
+            time_weighted_cumulative *= (1 + ret)
+        time_weighted_return_total = (time_weighted_cumulative - 1) * 100
+        
         # Create results DataFrame
         results = pd.DataFrame({
             'Date': prices.index,
             'Portfolio_Value': portfolio_value.values,
             'Daily_Return': portfolio_value.pct_change().fillna(0),
-            'Cumulative_Return': ((portfolio_value / net_contributions - 1) * 100),
+            'Cumulative_Return': time_weighted_return_total,  # This is now truly time-weighted
             'Total_Contributions': total_contributions.values,
             'Total_Withdrawals': total_withdrawals.values,
             'Net_Contributions': net_contributions.values
@@ -321,18 +352,35 @@ class PortfolioSimulator:
         # Calculate metrics accounting for contributions
         if isinstance(net_contributions, pd.Series):
             # Money-weighted return (IRR approximation)
+            # This is what the investor actually experienced considering contribution timing
             final_value = portfolio_values.iloc[-1]
             total_invested = net_contributions.iloc[-1]
-            total_return = (final_value / total_invested - 1) * 100 if total_invested > 0 else 0
+            money_weighted_return = (final_value / total_invested - 1) * 100 if total_invested > 0 else 0
             
-            # Time-weighted return (more accurate for performance measurement)
-            time_weighted_return = results['Cumulative_Return'].iloc[-1] if 'Cumulative_Return' in results.columns else total_return
+            # Time-weighted return (portfolio strategy performance)
+            # This measures how well the investment strategy performed independent of timing
+            time_weighted_return = results['Cumulative_Return'].iloc[-1] if 'Cumulative_Return' in results.columns else money_weighted_return
+            
+            # Use time-weighted return for annualized calculation (more accurate for strategy performance)
+            if len(returns) > 0:
+                days_total = (portfolio_values.index[-1] - portfolio_values.index[0]).days
+                if days_total > 0:
+                    annualized_time_weighted = ((1 + time_weighted_return/100) ** (365/days_total) - 1) * 100
+                else:
+                    annualized_time_weighted = 0
+            else:
+                annualized_time_weighted = 0
+                
         else:
-            total_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0] - 1) * 100
-            time_weighted_return = total_return
+            # No contributions/withdrawals - both returns are the same
+            money_weighted_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0] - 1) * 100
+            time_weighted_return = money_weighted_return
+            annualized_time_weighted = ((portfolio_values.iloc[-1] / portfolio_values.iloc[0]) ** 
+                               (252 / len(returns)) - 1) * 100 if len(returns) > 0 else 0
         
+        # Legacy annualized return calculation (based on portfolio values)
         annualized_return = ((portfolio_values.iloc[-1] / portfolio_values.iloc[0]) ** 
-                           (252 / len(returns)) - 1) * 100
+                           (252 / len(returns)) - 1) * 100 if len(returns) > 0 else 0
         
         volatility = returns.std() * np.sqrt(252) * 100  # Annualized volatility
         
@@ -354,9 +402,9 @@ class PortfolioSimulator:
         win_rate = (positive_days / total_days) * 100 if total_days > 0 else 0
         
         metrics = {
-            'Total Return (%)': round(total_return, 2),
-            'Time-Weighted Return (%)': round(time_weighted_return, 2) if 'time_weighted_return' in locals() else round(total_return, 2),
-            'Annualized Return (%)': round(annualized_return, 2),
+            'Total Return (%)': round(money_weighted_return, 2),
+            'Time-Weighted Return (%)': round(time_weighted_return, 2),
+            'Annualized Return (%)': round(annualized_time_weighted, 2),
             'Volatility (%)': round(volatility, 2),
             'Sharpe Ratio': round(sharpe_ratio, 2),
             'Maximum Drawdown (%)': round(max_drawdown, 2),
