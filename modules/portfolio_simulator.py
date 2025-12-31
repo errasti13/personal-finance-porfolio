@@ -74,12 +74,12 @@ class PortfolioSimulator:
                 stock = yf.Ticker(ticker)
                 df = stock.history(start=start_date, end=end_date, auto_adjust=True)
                 
-                if not df.empty:
+                if not df.empty and len(df) > 5:  # Require at least 5 data points
                     # Cache the data
                     self._data_cache[cache_key] = df
                     return ticker, df
                 else:
-                    st.warning(f"No data available for {ticker}")
+                    st.warning(f"Insufficient data available for {ticker} ({len(df) if not df.empty else 0} data points)")
                     return ticker, pd.DataFrame()
                     
             except Exception as e:
@@ -455,24 +455,38 @@ class PortfolioSimulator:
             return {}
         
         # Calculate historical returns for each asset and create return matrix
-        returns_matrix = []
+        returns_data = {}
         valid_tickers = []
         allocation_weights = []
         
+        # First pass: collect all returns data and find common date range
+        all_dates = None
         for ticker, allocation in allocations.items():
             if ticker in data and not data[ticker].empty and allocation > 0:
                 prices = data[ticker]['Close'].dropna()
                 if len(prices) > 1:
-                    returns = prices.pct_change().dropna().values
-                    returns_matrix.append(returns)
+                    returns = prices.pct_change().dropna()
+                    returns_data[ticker] = returns
                     valid_tickers.append(ticker)
                     allocation_weights.append(allocation / 100)
+                    
+                    # Find common date range
+                    if all_dates is None:
+                        all_dates = returns.index
+                    else:
+                        all_dates = all_dates.intersection(returns.index)
         
-        if not valid_tickers:
+        if not valid_tickers or all_dates is None or len(all_dates) == 0:
             return {}
         
+        # Second pass: create aligned returns matrix using common dates
+        returns_matrix = []
+        for ticker in valid_tickers:
+            aligned_returns = returns_data[ticker].reindex(all_dates).fillna(0).values
+            returns_matrix.append(aligned_returns)
+        
         # Convert to numpy arrays for vectorization
-        returns_matrix = np.array(returns_matrix)  # Shape: (n_assets, n_historical_days)
+        returns_matrix = np.array(returns_matrix)  # Shape: (n_assets, n_common_days)
         allocation_weights = np.array(allocation_weights)  # Shape: (n_assets,)
         
         # Calculate contribution/withdrawal schedules
@@ -500,6 +514,9 @@ class PortfolioSimulator:
         # Vectorized simulation - generate all random returns at once
         n_assets, n_historical_returns = returns_matrix.shape
         
+        if n_historical_returns == 0:
+            return {}
+        
         # Generate random indices for all simulations and days at once
         # Shape: (simulations, trading_days, n_assets)
         random_indices = np.random.randint(0, n_historical_returns, size=(simulations, trading_days, n_assets))
@@ -516,21 +533,32 @@ class PortfolioSimulator:
         net_cashflow = contrib_schedule - withdraw_schedule  # Shape: (trading_days,)
         
         # Memory-efficient vectorized simulation
+        all_time_series = []  # Store time series for best/worst case analysis
+        
         if periodic_contribution == 0 and periodic_withdrawal == 0:
             # No cash flows - ultra-fast pure vectorized calculation
             if progress_callback:
                 progress_callback(1, 2)
             
             daily_multipliers = 1 + portfolio_daily_returns  # Shape: (simulations, trading_days)
-            final_values = initial_investment * np.prod(daily_multipliers, axis=1)
+            
+            # Calculate cumulative portfolio values for all simulations
+            portfolio_time_series = np.zeros((simulations, trading_days + 1))
+            portfolio_time_series[:, 0] = initial_investment
+            
+            for day in range(trading_days):
+                portfolio_time_series[:, day + 1] = portfolio_time_series[:, day] * (1 + portfolio_daily_returns[:, day])
+            
+            final_values = portfolio_time_series[:, -1]
+            all_time_series = portfolio_time_series
             
             if progress_callback:
                 progress_callback(2, 2)
             
         else:
             # With cash flows - optimized loop with memory efficiency
-            # Process in smaller chunks if dealing with large simulations to manage memory
-            chunk_size = min(simulations, 10000)  # Process max 10k simulations at once
+            # For time series, we need to store more data, so use smaller chunks
+            chunk_size = min(simulations, 1000)  # Smaller chunks due to memory requirements
             all_final_values = []
             
             for chunk_start in range(0, simulations, chunk_size):
@@ -557,6 +585,12 @@ class PortfolioSimulator:
                 
                 all_final_values.extend(portfolio_values[:, -1])
                 
+                # Store time series for this chunk
+                if len(all_time_series) == 0:
+                    all_time_series = portfolio_values
+                else:
+                    all_time_series = np.vstack([all_time_series, portfolio_values])
+                
                 # Progress callback
                 if progress_callback:
                     progress_callback(chunk_end, simulations)
@@ -565,6 +599,15 @@ class PortfolioSimulator:
         
         # Ensure non-negative values
         final_values = np.maximum(0, final_values)
+        all_time_series = np.maximum(0, all_time_series)
+        
+        # Find best and worst case time series
+        best_case_idx = np.argmax(final_values)
+        worst_case_idx = np.argmin(final_values)
+        median_idx = np.argpartition(final_values, len(final_values)//2)[len(final_values)//2]
+        
+        # Create time axis (in years)
+        time_axis = np.linspace(0, years, trading_days + 1)
         
         # Calculate statistics from vectorized results
         return {
@@ -577,7 +620,11 @@ class PortfolioSimulator:
             'percentile_95': np.percentile(final_values, 95),
             'min': np.min(final_values),
             'max': np.max(final_values),
-            'all_results': final_values.tolist()
+            'all_results': final_values.tolist(),
+            'time_axis': time_axis.tolist(),
+            'best_case_series': all_time_series[best_case_idx].tolist(),
+            'worst_case_series': all_time_series[worst_case_idx].tolist(),
+            'median_case_series': all_time_series[median_idx].tolist()
         }
     
     def get_asset_correlation(self, tickers: List[str], data: Dict[str, pd.DataFrame]) -> pd.DataFrame:

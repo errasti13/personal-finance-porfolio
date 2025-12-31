@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 import os
 import yfinance as yf
 import tempfile
+import io
+import zipfile
 from typing import Dict, Optional
 from modules.transaction_analyzer import TransactionAnalyzer
 from modules.portfolio_simulator import PortfolioSimulator
@@ -1010,6 +1012,19 @@ def portfolio_dashboard():
                     progress_callback
                 )
                 
+                # Validate we have sufficient data
+                valid_data_count = sum(1 for ticker, data in historical_data.items() 
+                                     if not data.empty and len(data) > 30)
+                
+                if valid_data_count == 0:
+                    st.error("No valid historical data found for the selected assets and date range. Please try a different date range or assets.")
+                    progress_bar.empty()
+                    status_text.empty()
+                    return
+                elif valid_data_count < len(tickers):
+                    missing_tickers = [ticker for ticker, data in historical_data.items() if data.empty or len(data) <= 30]
+                    st.warning(f"Limited or no data available for: {', '.join(missing_tickers)}. Continuing with available data.")
+                
                 # Run backtest for baseline
                 status_text.text("Running baseline backtest...")
                 progress_bar.progress(0.4)
@@ -1036,18 +1051,31 @@ def portfolio_dashboard():
                     progress_bar.progress(progress)
                     status_text.text(f"Monte Carlo simulation: {current}/{total}")
                 
-                mc_results = simulator.monte_carlo_simulation(
-                    settings['allocations'],
-                    historical_data,
-                    settings['initial_investment'],
-                    settings['years_to_project'],
-                    settings['num_simulations'],
-                    mc_progress_callback,
-                    settings.get('periodic_contribution', 0),
-                    settings.get('contribution_frequency', 'monthly'),
-                    settings.get('periodic_withdrawal', 0),
-                    settings.get('withdrawal_frequency', 'monthly')
-                )
+                try:
+                    mc_results = simulator.monte_carlo_simulation(
+                        settings['allocations'],
+                        historical_data,
+                        settings['initial_investment'],
+                        settings['years_to_project'],
+                        settings['num_simulations'],
+                        mc_progress_callback,
+                        settings.get('periodic_contribution', 0),
+                        settings.get('contribution_frequency', 'monthly'),
+                        settings.get('periodic_withdrawal', 0),
+                        settings.get('withdrawal_frequency', 'monthly')
+                    )
+                    
+                    if not mc_results:
+                        st.error("Monte Carlo simulation failed. This may be due to insufficient or inconsistent data.")
+                        progress_bar.empty()
+                        status_text.empty()
+                        return
+                        
+                except Exception as mc_error:
+                    st.error(f"Monte Carlo simulation error: {str(mc_error)}")
+                    progress_bar.empty()
+                    status_text.empty()
+                    return
                 
                 progress_bar.empty()
                 status_text.empty()
@@ -1055,276 +1083,211 @@ def portfolio_dashboard():
                 if backtest_results is not None and not backtest_results.empty and mc_results:
                     
                     st.markdown("---")
-                    st.markdown("## 📊 Simulation Results")
+                    st.markdown("## 🎲 Monte Carlo Simulation Results")
                     
-                    # Display backtest metrics
-                    st.markdown("**� Historical Backtest Performance:**")
+                    # Calculate expected contributions over projection period
+                    years = settings['years_to_project']
+                    monthly_contrib = settings.get('periodic_contribution', 0)
+                    monthly_withdraw = settings.get('periodic_withdrawal', 0)
                     
-                    col1, col2, col3, col4 = st.columns(4)
+                    if settings.get('contribution_frequency', 'monthly') == 'monthly':
+                        total_contrib = monthly_contrib * 12 * years
+                    elif settings.get('contribution_frequency', 'monthly') == 'quarterly':
+                        total_contrib = monthly_contrib * 4 * years
+                    else:  # yearly
+                        total_contrib = monthly_contrib * years
                     
-                    with col1:
-                        st.metric(
-                            "Total Return",
-                            f"{backtest_metrics.get('Total Return (%)', 0):.2f}%",
-                            help="Money-weighted return with contributions"
-                        )
-                        st.metric(
-                            "Time-Weighted Return",
-                            f"{backtest_metrics.get('Time-Weighted Return (%)', 0):.2f}%",
-                            help="Portfolio strategy performance"
-                        )
+                    if settings.get('withdrawal_frequency', 'monthly') == 'monthly':
+                        total_withdraw = monthly_withdraw * 12 * years
+                    elif settings.get('withdrawal_frequency', 'monthly') == 'quarterly':
+                        total_withdraw = monthly_withdraw * 4 * years
+                    else:  # yearly
+                        total_withdraw = monthly_withdraw * years
                     
-                    with col2:
-                        st.metric(
-                            "Annualized Return",
-                            f"{backtest_metrics.get('Annualized Return (%)', 0):.2f}%",
-                            help="Average yearly return"
-                        )
-                        st.metric(
-                            "Volatility",
-                            f"{backtest_metrics.get('Volatility (%)', 0):.2f}%",
-                            help="Annual volatility (risk)"
-                        )
+                    expected_invested = settings['initial_investment'] + total_contrib - total_withdraw
                     
-                    with col3:
-                        st.metric(
-                            "Sharpe Ratio",
-                            f"{backtest_metrics.get('Sharpe Ratio', 0):.2f}",
-                            help="Risk-adjusted return"
-                        )
-                        st.metric(
-                            "Max Drawdown",
-                            f"{backtest_metrics.get('Maximum Drawdown (%)', 0):.2f}%",
-                            help="Largest decline"
-                        )
-                    
-                    with col4:
-                        st.metric(
-                            "Final Value",
-                            f"${backtest_metrics.get('Final Value', 0):,.0f}",
-                            help="Historical backtest result"
-                        )
-                        st.metric(
-                            "Win Rate",
-                            f"{backtest_metrics.get('Win Rate (%)', 0):.1f}%",
-                            help="Percentage of positive days"
-                        )
-                    
-                    # Show contribution summary
-                    if settings.get('periodic_contribution', 0) > 0 or settings.get('periodic_withdrawal', 0) > 0:
-                        st.markdown("---")
-                        st.markdown("**💰 Cash Flow Summary:**")
-                        
-                        col1_cf, col2_cf, col3_cf = st.columns(3)
-                        
-                        with col1_cf:
-                            if 'Total Contributions' in backtest_metrics:
-                                st.metric(
-                                    "Total Contributed",
-                                    f"${backtest_metrics.get('Total Contributions', 0):,.0f}"
-                                )
-                        
-                        with col2_cf:
-                            if 'Total Withdrawals' in backtest_metrics:
-                                st.metric(
-                                    "Total Withdrawn", 
-                                    f"${backtest_metrics.get('Total Withdrawals', 0):,.0f}"
-                                )
-                        
-                        with col3_cf:
-                            if 'Net Contributions' in backtest_metrics:
-                                st.metric(
-                                    "Net Invested",
-                                    f"${backtest_metrics.get('Net Contributions', 0):,.0f}"
-                                )
-                    
-                    # Monte Carlo results
-                    st.markdown("---")
-                    st.markdown(f"**🎲 Monte Carlo Projections ({settings['years_to_project']} years):**")
+                    # Monte Carlo results - focusing on best and worst case scenarios
+                    st.markdown(f"**Portfolio Projections after {years} years ({settings['num_simulations']:,} simulations):**")
                     
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
+                        # Best Case Scenario
+                        best_case_value = mc_results['percentile_95']
+                        best_case_gain = best_case_value - expected_invested
+                        best_case_return = (best_case_gain / expected_invested * 100) if expected_invested > 0 else 0
+                        
+                        st.markdown("""
+                        <div style="padding: 1rem; border-radius: 10px; background-color: #28a745; color: white; text-align: center;">
+                            <h3>🚀 Best Case Scenario</h3>
+                            <h2>${:,.0f}</h2>
+                            <p>95th Percentile</p>
+                            <p>Gain: ${:,.0f} ({:.1f}%)</p>
+                        </div>
+                        """.format(best_case_value, best_case_gain, best_case_return), unsafe_allow_html=True)
+                    
+                    with col2:
+                        # Expected/Median Value
+                        median_value = mc_results['median']
+                        median_gain = median_value - expected_invested
+                        median_return = (median_gain / expected_invested * 100) if expected_invested > 0 else 0
+                        
+                        st.markdown("""
+                        <div style="padding: 1rem; border-radius: 10px; background-color: #007bff; color: white; text-align: center;">
+                            <h3>📊 Expected Outcome</h3>
+                            <h2>${:,.0f}</h2>
+                            <p>50th Percentile (Median)</p>
+                            <p>Gain: ${:,.0f} ({:.1f}%)</p>
+                        </div>
+                        """.format(median_value, median_gain, median_return), unsafe_allow_html=True)
+                    
+                    with col3:
+                        # Worst Case Scenario
+                        worst_case_value = mc_results['percentile_5']
+                        worst_case_gain = worst_case_value - expected_invested
+                        worst_case_return = (worst_case_gain / expected_invested * 100) if expected_invested > 0 else 0
+                        
+                        st.markdown("""
+                        <div style="padding: 1rem; border-radius: 10px; background-color: #dc3545; color: white; text-align: center;">
+                            <h3>⚠️ Worst Case Scenario</h3>
+                            <h2>${:,.0f}</h2>
+                            <p>5th Percentile</p>
+                            <p>Loss: ${:,.0f} ({:.1f}%)</p>
+                        </div>
+                        """.format(worst_case_value, abs(worst_case_gain), abs(worst_case_return)), unsafe_allow_html=True)
+                    
+                    # Additional summary metrics
+                    st.markdown("---")
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
                         st.metric(
-                            "Expected Value",
-                            f"${mc_results['mean']:,.0f}",
-                            help="Average outcome"
-                        )
-                        st.metric(
-                            "Median Value",
-                            f"${mc_results['median']:,.0f}",
-                            help="50th percentile"
+                            "Initial Investment",
+                            f"${settings['initial_investment']:,.0f}",
+                            help="Starting portfolio value"
                         )
                     
                     with col2:
                         st.metric(
-                            "Best Case (95th)",
-                            f"${mc_results['percentile_95']:,.0f}",
-                            help="Optimistic scenario"
-                        )
-                        st.metric(
-                            "Worst Case (5th)",
-                            f"${mc_results['percentile_5']:,.0f}",
-                            help="Pessimistic scenario"
+                            "Total Expected Investment",
+                            f"${expected_invested:,.0f}",
+                            help="Initial + contributions - withdrawals over time"
                         )
                     
                     with col3:
-                        prob_positive = sum(1 for x in mc_results['all_results'] if x > settings['initial_investment']) / len(mc_results['all_results']) * 100
+                        prob_positive = sum(1 for x in mc_results['all_results'] if x > expected_invested) / len(mc_results['all_results']) * 100
                         st.metric(
                             "Probability of Gain",
                             f"{prob_positive:.1f}%",
-                            help="Chance of positive returns"
+                            help="Chance of positive returns vs total invested"
                         )
-                        
-                        # Calculate expected contributions over projection period
-                        years = settings['years_to_project']
-                        monthly_contrib = settings.get('periodic_contribution', 0)
-                        monthly_withdraw = settings.get('periodic_withdrawal', 0)
-                        
-                        if settings.get('contribution_frequency', 'monthly') == 'monthly':
-                            total_contrib = monthly_contrib * 12 * years
-                        elif settings.get('contribution_frequency', 'monthly') == 'quarterly':
-                            total_contrib = monthly_contrib * 4 * years
-                        else:  # yearly
-                            total_contrib = monthly_contrib * years
-                        
-                        if settings.get('withdrawal_frequency', 'monthly') == 'monthly':
-                            total_withdraw = monthly_withdraw * 12 * years
-                        elif settings.get('withdrawal_frequency', 'monthly') == 'quarterly':
-                            total_withdraw = monthly_withdraw * 4 * years
-                        else:  # yearly
-                            total_withdraw = monthly_withdraw * years
-                        
-                        expected_invested = settings['initial_investment'] + total_contrib - total_withdraw
-                        
+                    
+                    with col4:
+                        prob_loss = sum(1 for x in mc_results['all_results'] if x < settings['initial_investment']) / len(mc_results['all_results']) * 100
                         st.metric(
-                            "Expected Total Invested",
-                            f"${expected_invested:,.0f}",
-                            help="Initial + future contributions - withdrawals"
+                            "Probability of Loss",
+                            f"{prob_loss:.1f}%",
+                            help="Chance of losing initial investment"
                         )
                     
-                    # Scenario comparison chart
+                    # Portfolio Evolution Chart
                     st.markdown("---")
-                    st.markdown("**📈 Scenario Comparison:**")
+                    st.markdown("**📈 Portfolio Evolution Over Time:**")
                     
-                    # Create scenario projection data
-                    projection_years = list(range(years + 1))
-                    
-                    # Simple projection based on historical returns for visualization
-                    if not backtest_results.empty and len(backtest_results) > 1:
-                        # Get average annual return from backtest
-                        annual_return = backtest_metrics.get('Annualized Return (%)', 7) / 100
-                        volatility = backtest_metrics.get('Volatility (%)', 15) / 100
+                    if 'time_axis' in mc_results and 'best_case_series' in mc_results:
+                        fig_evolution = go.Figure()
                         
-                        # Create three scenarios
-                        best_case_return = annual_return + volatility
-                        median_return = annual_return
-                        worst_case_return = annual_return - volatility
-                        
-                        # Project scenarios with contributions
-                        def project_scenario(return_rate, initial, monthly_add, years):
-                            values = [initial]
-                            current_value = initial
-                            
-                            for year in range(1, years + 1):
-                                # Add contributions during the year
-                                if settings.get('contribution_frequency', 'monthly') == 'monthly':
-                                    annual_contributions = monthly_add * 12
-                                elif settings.get('contribution_frequency', 'monthly') == 'quarterly':
-                                    annual_contributions = monthly_add * 4
-                                else:  # yearly
-                                    annual_contributions = monthly_add
-                                
-                                # Subtract withdrawals
-                                if settings.get('withdrawal_frequency', 'monthly') == 'monthly':
-                                    annual_withdrawals = settings.get('periodic_withdrawal', 0) * 12
-                                elif settings.get('withdrawal_frequency', 'monthly') == 'quarterly':
-                                    annual_withdrawals = settings.get('periodic_withdrawal', 0) * 4
-                                else:  # yearly
-                                    annual_withdrawals = settings.get('periodic_withdrawal', 0)
-                                
-                                # Apply return and add net contributions
-                                current_value = (current_value + annual_contributions/2) * (1 + return_rate) + annual_contributions/2 - annual_withdrawals
-                                values.append(max(0, current_value))  # Prevent negative values
-                            
-                            return values
-                        
-                        best_case_values = project_scenario(best_case_return, settings['initial_investment'], monthly_contrib, years)
-                        median_values = project_scenario(median_return, settings['initial_investment'], monthly_contrib, years)
-                        worst_case_values = project_scenario(worst_case_return, settings['initial_investment'], monthly_contrib, years)
-                        
-                        # Create the projection chart
-                        fig = go.Figure()
-                        
-                        fig.add_trace(go.Scatter(
-                            x=projection_years,
-                            y=best_case_values,
+                        # Add best case trajectory
+                        fig_evolution.add_trace(go.Scatter(
+                            x=mc_results['time_axis'],
+                            y=mc_results['best_case_series'],
                             mode='lines',
-                            name='Best Case (95th %ile)',
+                            name='Best Case (Actual Path)',
                             line=dict(color='green', width=3),
                             fill=None
                         ))
                         
-                        fig.add_trace(go.Scatter(
-                            x=projection_years,
-                            y=median_values,
+                        # Add median case trajectory
+                        fig_evolution.add_trace(go.Scatter(
+                            x=mc_results['time_axis'],
+                            y=mc_results['median_case_series'],
                             mode='lines',
-                            name='Median (50th %ile)',
-                            line=dict(color='blue', width=3),
+                            name='Median Case (Actual Path)',
+                            line=dict(color='blue', width=2),
                             fill=None
                         ))
                         
-                        fig.add_trace(go.Scatter(
-                            x=projection_years,
-                            y=worst_case_values,
+                        # Add worst case trajectory
+                        fig_evolution.add_trace(go.Scatter(
+                            x=mc_results['time_axis'],
+                            y=mc_results['worst_case_series'],
                             mode='lines',
-                            name='Worst Case (5th %ile)',
+                            name='Worst Case (Actual Path)',
                             line=dict(color='red', width=3),
                             fill=None
                         ))
                         
-                        # Add Monte Carlo endpoint markers
-                        fig.add_trace(go.Scatter(
-                            x=[years],
-                            y=[mc_results['percentile_95']],
-                            mode='markers',
-                            name='MC Best Case',
-                            marker=dict(color='green', size=12, symbol='star'),
-                            showlegend=False
-                        ))
+                        # Add total invested reference line (if contributions/withdrawals exist)
+                        if settings.get('periodic_contribution', 0) > 0 or settings.get('periodic_withdrawal', 0) > 0:
+                            # Calculate cumulative investment over time
+                            time_years = mc_results['time_axis']
+                            cumulative_invested = []
+                            
+                            for t in time_years:
+                                if settings.get('contribution_frequency', 'monthly') == 'monthly':
+                                    contrib_per_year = settings.get('periodic_contribution', 0) * 12
+                                elif settings.get('contribution_frequency', 'monthly') == 'quarterly':
+                                    contrib_per_year = settings.get('periodic_contribution', 0) * 4
+                                else:  # yearly
+                                    contrib_per_year = settings.get('periodic_contribution', 0)
+                                
+                                if settings.get('withdrawal_frequency', 'monthly') == 'monthly':
+                                    withdraw_per_year = settings.get('periodic_withdrawal', 0) * 12
+                                elif settings.get('withdrawal_frequency', 'monthly') == 'quarterly':
+                                    withdraw_per_year = settings.get('periodic_withdrawal', 0) * 4
+                                else:  # yearly
+                                    withdraw_per_year = settings.get('periodic_withdrawal', 0)
+                                
+                                net_per_year = contrib_per_year - withdraw_per_year
+                                total_invested_at_time = settings['initial_investment'] + (net_per_year * t)
+                                cumulative_invested.append(max(0, total_invested_at_time))
+                            
+                            fig_evolution.add_trace(go.Scatter(
+                                x=time_years,
+                                y=cumulative_invested,
+                                mode='lines',
+                                name='Total Money Invested',
+                                line=dict(color='orange', width=2, dash='dot'),
+                                fill=None
+                            ))
                         
-                        fig.add_trace(go.Scatter(
-                            x=[years],
-                            y=[mc_results['median']],
-                            mode='markers',
-                            name='MC Median',
-                            marker=dict(color='blue', size=12, symbol='star'),
-                            showlegend=False
-                        ))
-                        
-                        fig.add_trace(go.Scatter(
-                            x=[years],
-                            y=[mc_results['percentile_5']],
-                            mode='markers',
-                            name='MC Worst Case',
-                            marker=dict(color='red', size=12, symbol='star'),
-                            showlegend=False
-                        ))
-                        
-                        fig.update_layout(
-                            title=f"Portfolio Value Projections ({years} Years)",
+                        fig_evolution.update_layout(
+                            title=f"Portfolio Value Evolution - Best, Median, and Worst Case Scenarios ({years} Years)",
                             xaxis_title="Years",
                             yaxis_title="Portfolio Value ($)",
-                            hovermode='x',
+                            hovermode='x unified',
                             height=500,
                             legend=dict(x=0.02, y=0.98)
                         )
                         
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig_evolution, use_container_width=True)
+                        
+                        # Add explanation
+                        st.info("""
+                        **Chart Explanation:**
+                        - 🟢 **Green line**: Best case scenario - an actual simulated path that ended in the 95th percentile
+                        - 🔵 **Blue line**: Median case scenario - an actual simulated path that ended near the median
+                        - 🔴 **Red line**: Worst case scenario - an actual simulated path that ended in the 5th percentile
+                        - 🟠 **Orange dotted line**: Total amount of money you would have invested over time (including contributions)
+                        
+                        These are real portfolio trajectories from the Monte Carlo simulation, showing how your portfolio value could evolve over time with daily market movements.
+                        """)
+                    else:
+                        st.warning("Time series data not available. Please re-run the simulation.")
                     
-                    # Distribution histogram
+                    # Monte Carlo Distribution Chart
                     st.markdown("---")
-                    st.markdown("**📊 Monte Carlo Return Distribution:**")
+                    st.markdown("**� Monte Carlo Portfolio Value Distribution:**")
                     
                     fig_hist = go.Figure()
                     
@@ -1336,23 +1299,38 @@ def portfolio_dashboard():
                         marker_color='lightblue'
                     ))
                     
-                    # Add percentile lines
-                    for percentile, label, color in [(5, '5th %ile', 'red'), (50, 'Median', 'blue'), (95, '95th %ile', 'green')]:
-                        value = mc_results[f'percentile_{percentile}'] if percentile != 50 else mc_results['median']
+                    # Add scenario lines
+                    scenarios = [
+                        (mc_results['percentile_5'], '5th Percentile (Worst Case)', 'red'),
+                        (mc_results['median'], 'Median (Expected)', 'blue'), 
+                        (mc_results['percentile_95'], '95th Percentile (Best Case)', 'green')
+                    ]
+                    
+                    for value, label, color in scenarios:
                         fig_hist.add_vline(
                             x=value,
                             line_dash="dash",
                             line_color=color,
-                            line_width=2,
-                            annotation_text=f"{label}: ${value:,.0f}",
+                            line_width=3,
+                            annotation_text=f"{label}<br>${value:,.0f}",
                             annotation_position="top"
                         )
                     
+                    # Add expected investment line
+                    fig_hist.add_vline(
+                        x=expected_invested,
+                        line_dash="dot",
+                        line_color="orange",
+                        line_width=2,
+                        annotation_text=f"Total Invested<br>${expected_invested:,.0f}",
+                        annotation_position="bottom"
+                    )
+                    
                     fig_hist.update_layout(
-                        title=f"Portfolio Value Distribution after {years} years ({num_simulations:,} simulations)",
+                        title=f"Portfolio Value Distribution after {years} years ({settings['num_simulations']:,} simulations)",
                         xaxis_title="Portfolio Value ($)",
                         yaxis_title="Frequency",
-                        height=400,
+                        height=500,
                         showlegend=False
                     )
                     
