@@ -355,20 +355,13 @@ def transaction_analysis_dashboard():
     
     # Sidebar for file upload
     with st.sidebar:
-        st.header("Upload Transaction Data")
+        st.header("Upload Bank Statement")
         
-        # PDF upload for bank statements
+        # PDF upload for bank statements only
         uploaded_pdf = st.file_uploader(
             "Upload Bank Statement (PDF)",
             type=['pdf'],
-            help="Upload your bank statement PDF for automatic transaction analysis"
-        )
-        
-        # CSV upload for manual transaction data
-        uploaded_csv = st.file_uploader(
-            "Upload Transaction Data (CSV)",
-            type=['csv'],
-            help="Upload CSV with columns: date, description, amount, category (optional)"
+            help="Upload your bank statement PDF for automatic transaction analysis. Supports UBS and other major banks."
         )
     
     # Process uploaded files
@@ -397,22 +390,6 @@ def transaction_analysis_dashboard():
                 st.error(f"Error processing PDF: {str(e)}")
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
-    
-    elif uploaded_csv is not None:
-        try:
-            transactions_df = pd.read_csv(uploaded_csv)
-            
-            # Validate required columns
-            required_cols = ['date', 'description', 'amount']
-            if all(col in transactions_df.columns for col in required_cols):
-                transactions_df['date'] = pd.to_datetime(transactions_df['date'])
-                st.session_state.transactions_data = transactions_df
-                st.success(f"Successfully loaded {len(transactions_df)} transactions!")
-            else:
-                st.error(f"CSV must contain columns: {', '.join(required_cols)}")
-        
-        except Exception as e:
-            st.error(f"Error processing CSV: {str(e)}")
     
     # Use data from session state
     if not st.session_state.transactions_data.empty:
@@ -589,18 +566,24 @@ def transaction_analysis_dashboard():
                 st.success("Transactions saved to data/processed_transactions.csv")
     
     else:
-        st.info("📊 No transaction data available. Please upload a bank statement PDF or CSV file.")
+        st.info("📊 No transaction data available. Please upload a bank statement PDF for automatic analysis.")
         st.markdown("""
-        **Supported formats:**
+        **Supported format:**
         
-        **PDF**: Bank statements from UBS and other major banks
+        **PDF Bank Statements**: Automatically extracts and categorizes transactions from bank statements
         
-        **CSV**: Should contain at minimum:
-        ```
-        date,description,amount,category
-        2025-12-01,Grocery Shopping,-50.00,Food & Dining
-        2025-12-01,Salary,3000.00,Income
-        ```
+        **Supported Banks:**
+        - UBS and other major Swiss banks
+        - European banks with standard statement formats
+        - Various international banks
+        
+        **What gets analyzed:**
+        - Transaction dates and descriptions
+        - Amounts (income and expenses)
+        - Automatic categorization of expenses
+        - Spending patterns and trends
+        
+        Simply upload your PDF bank statement and the system will automatically extract and analyze your transactions.
         """)
 
 def overview_dashboard():
