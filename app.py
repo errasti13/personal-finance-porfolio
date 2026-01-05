@@ -898,7 +898,6 @@ def portfolio_dashboard():
                     st.markdown("You've selected:")
                     for info in asset_info:
                         st.markdown(info)
-                    st.markdown("💡 **Tip**: If you get 'No overlapping data' error, try selecting assets with similar time periods (e.g., all stocks from major indices, or all ETFs).")
                 
                 # Create allocation sliders
                 col_count = min(len(selected_assets), 3)
@@ -1077,14 +1076,6 @@ def portfolio_dashboard():
                         # Extract useful info from error message
                         st.error(f"❌ **Insufficient Historical Data**")
                         st.error(f"**Error Details:** {error_msg}")
-                        
-                        # Provide helpful suggestions
-                        st.markdown("""
-                        **💡 Solutions:**
-                        - **Reduce simulation period** to 20 years or fewer
-                        - **Choose different assets** with longer historical data (e.g., S&P 500 has 100+ years)
-                        - **Mix of assets**: Combine long-history assets (S&P 500, bonds) with shorter ones (Gold, REITs)
-                        """)
                     else:
                         st.error(f"❌ Monte Carlo simulation error: {error_msg}")
                     
@@ -1098,8 +1089,8 @@ def portfolio_dashboard():
                 if backtest_results is not None and not backtest_results.empty and mc_results:
                     
                     st.markdown("---")
-                    st.markdown("## 🎲 Monte Carlo Simulation Results")
-                    
+                    st.markdown("## 🎲 Portfolio Simulation Results")
+
                     # Calculate expected cash flow over projection period
                     years = settings['years_to_project']
                     periodic_cash_flow = settings.get('periodic_contribution', 0)

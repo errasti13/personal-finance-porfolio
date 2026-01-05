@@ -176,10 +176,7 @@ class PortfolioSimulator:
             if hasattr(st, 'error'):
                 st.error(f"Insufficient overlapping data found. Only {overlap_days} days of overlap between selected assets.")
             return pd.DataFrame()
-        
-        if hasattr(st, 'info'):
-            st.info(f"Using {len(valid_tickers)} assets with {overlap_days:,} days of overlapping data ({common_start.strftime('%Y-%m-%d')} to {common_end.strftime('%Y-%m-%d')})")
-        
+         
         # Fetch historical data for the common period with proper timezone handling
         asset_data = {}
         for ticker in valid_tickers:
@@ -239,7 +236,6 @@ class PortfolioSimulator:
         if hasattr(st, 'info'):
             actual_start = prices.index[0].strftime('%Y-%m-%d')
             actual_end = prices.index[-1].strftime('%Y-%m-%d')
-            st.info(f"Using {len(valid_tickers)} assets with {len(prices):,} days of data ({actual_start} to {actual_end})")
         
         # Remove any remaining NaN values
         prices = prices.dropna()
@@ -579,8 +575,6 @@ class PortfolioSimulator:
                 
                 if available_years >= 1:
                     max_simulation_years = int(available_years)
-                    st.info(f"💡 Try reducing the simulation period to {max_simulation_years} years or fewer, "
-                           f"or choose assets with longer historical data.")
             return {}
         
         # Simulation parameters
