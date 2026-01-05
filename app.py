@@ -976,12 +976,6 @@ def portfolio_dashboard():
                         and not validation.get('error')):
                         st.error("❌ No data available for selected assets. Please choose different assets.")
             
-            # Validate projection period against available data
-            if selected_assets and years_to_project > 15:
-                st.info(f"💡 For {years_to_project}-year simulations, ensure your assets have sufficient historical data. Gold typically has ~25 years, while S&P 500 has 100+ years.")
-            elif years_to_project > 25:
-                st.warning(f"⚠️ {years_to_project}-year simulations require extensive historical data. Consider reducing to 20-25 years for more reliable results.")
-            
             # Monte Carlo settings - hardcoded for optimal performance
             num_simulations = 250
             
