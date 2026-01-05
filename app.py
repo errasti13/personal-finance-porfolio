@@ -1114,36 +1114,44 @@ def portfolio_dashboard():
                         best_case_value = mc_results['percentile_95']
                         best_case_gain = best_case_value - expected_invested
                         best_case_return = (best_case_gain / expected_invested * 100) if expected_invested > 0 else 0
+                        # Calculate annualized return: (final_value / initial_invested)^(1/years) - 1
+                        best_case_annualized = ((best_case_value / expected_invested) ** (1 / years) - 1) * 100 if expected_invested > 0 and years > 0 else 0
                         
                         st.markdown("""
                         <div style="padding: 1rem; border-radius: 10px; background-color: #28a745; color: white; text-align: center;">
                             <h3>🚀 Best Case Scenario</h3>
                             <h2>${:,.0f}</h2>
                             <p>95th Percentile</p>
-                            <p>Gain: ${:,.0f} ({:.1f}%)</p>
+                            <p>Total: ${:,.0f} ({:.1f}%)</p>
+                            <p><strong>Annualized: {:.1f}%</strong></p>
                         </div>
-                        """.format(best_case_value, best_case_gain, best_case_return), unsafe_allow_html=True)
+                        """.format(best_case_value, best_case_gain, best_case_return, best_case_annualized), unsafe_allow_html=True)
                     
                     with col2:
                         # Expected/Median Value
                         median_value = mc_results['median']
                         median_gain = median_value - expected_invested
                         median_return = (median_gain / expected_invested * 100) if expected_invested > 0 else 0
+                        # Calculate annualized return
+                        median_annualized = ((median_value / expected_invested) ** (1 / years) - 1) * 100 if expected_invested > 0 and years > 0 else 0
                         
                         st.markdown("""
                         <div style="padding: 1rem; border-radius: 10px; background-color: #007bff; color: white; text-align: center;">
                             <h3>📊 Expected Outcome</h3>
                             <h2>${:,.0f}</h2>
                             <p>50th Percentile (Median)</p>
-                            <p>Gain: ${:,.0f} ({:.1f}%)</p>
+                            <p>Total: ${:,.0f} ({:.1f}%)</p>
+                            <p><strong>Annualized: {:.1f}%</strong></p>
                         </div>
-                        """.format(median_value, median_gain, median_return), unsafe_allow_html=True)
+                        """.format(median_value, median_gain, median_return, median_annualized), unsafe_allow_html=True)
                     
                     with col3:
                         # Worst Case Scenario
                         worst_case_value = mc_results['percentile_5']
                         worst_case_gain = worst_case_value - expected_invested
                         worst_case_return = (worst_case_gain / expected_invested * 100) if expected_invested > 0 else 0
+                        # Calculate annualized return
+                        worst_case_annualized = ((worst_case_value / expected_invested) ** (1 / years) - 1) * 100 if expected_invested > 0 and years > 0 else 0
                         
                         # Determine if it's a loss or gain
                         result_type = "Loss" if worst_case_gain < 0 else "Gain"
@@ -1153,9 +1161,10 @@ def portfolio_dashboard():
                             <h3>⚠️ Worst Case Scenario</h3>
                             <h2>${:,.0f}</h2>
                             <p>5th Percentile</p>
-                            <p>{}: ${:,.0f} ({:.1f}%)</p>
+                            <p>Total: ${:,.0f} ({:.1f}%)</p>
+                            <p><strong>Annualized: {:.1f}%</strong></p>
                         </div>
-                        """.format(worst_case_value, result_type, abs(worst_case_gain), abs(worst_case_return)), unsafe_allow_html=True)
+                        """.format(worst_case_value, abs(worst_case_gain), abs(worst_case_return), worst_case_annualized), unsafe_allow_html=True)
                     
                     # Additional summary metrics
                     st.markdown("---")
@@ -1189,6 +1198,49 @@ def portfolio_dashboard():
                             "Probability of Loss",
                             f"{prob_loss:.1f}%",
                             help="Chance of ending below total invested amount"
+                        )
+                    
+                    # Additional annualized performance metrics
+                    st.markdown("**📊 Annualized Performance Summary:**")
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        # Best case annualized return
+                        best_case_annualized = ((best_case_value / expected_invested) ** (1 / years) - 1) * 100 if expected_invested > 0 and years > 0 else 0
+                        st.metric(
+                            "Best Case (Annual)",
+                            f"{best_case_annualized:.1f}%",
+                            help="95th percentile annualized return"
+                        )
+                    
+                    with col2:
+                        # Median annualized return
+                        median_annualized = ((median_value / expected_invested) ** (1 / years) - 1) * 100 if expected_invested > 0 and years > 0 else 0
+                        st.metric(
+                            "Expected (Annual)",
+                            f"{median_annualized:.1f}%",
+                            help="Median annualized return"
+                        )
+                    
+                    with col3:
+                        # Worst case annualized return
+                        worst_case_annualized = ((worst_case_value / expected_invested) ** (1 / years) - 1) * 100 if expected_invested > 0 and years > 0 else 0
+                        st.metric(
+                            "Worst Case (Annual)",
+                            f"{worst_case_annualized:.1f}%",
+                            help="5th percentile annualized return"
+                        )
+                    
+                    with col4:
+                        # Calculate average annualized return across all simulations
+                        all_annualized = [((result / expected_invested) ** (1 / years) - 1) * 100 
+                                        for result in mc_results['all_results'] 
+                                        if expected_invested > 0 and years > 0]
+                        avg_annualized = sum(all_annualized) / len(all_annualized) if all_annualized else 0
+                        st.metric(
+                            "Average (Annual)",
+                            f"{avg_annualized:.1f}%",
+                            help="Mean annualized return across all simulations"
                         )
                     
                     # Portfolio Evolution Chart
