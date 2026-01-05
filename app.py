@@ -1030,10 +1030,6 @@ def portfolio_dashboard():
                     status_text.empty()
                     return
                 
-                # Simple info about data being used
-                years_of_data = (datetime.now() - datetime.strptime(historical_start_date, '%Y-%m-%d')).days // 365
-                st.info(f"📊 Using {years_of_data}+ years of historical data for statistical accuracy.")
-                
                 # Run backtest for baseline
                 status_text.text("Running baseline backtest...")
                 progress_bar.progress(0.4)
