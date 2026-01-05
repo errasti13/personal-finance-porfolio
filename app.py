@@ -1433,16 +1433,28 @@ def main():
     # Initialize session state
     init_session_state()
     
+    # Initialize page in session state if not present
+    if 'page' not in st.session_state:
+        st.session_state.page = "Overview"
+    
     # Sidebar navigation
     with st.sidebar:
         st.title("🏦 Finance Tool")
         
-        # Navigation
+        # Navigation - sync with session state
+        page_options = ["Overview", "Net Worth", "Portfolio", "Transactions", "Settings"]
+        current_index = page_options.index(st.session_state.page) if st.session_state.page in page_options else 0
+        
         page = st.selectbox(
             "Choose a section:",
-            ["Overview", "Net Worth", "Portfolio", "Transactions", "Settings"],
-            index=0
+            page_options,
+            index=current_index
         )
+        
+        # Update session state when selectbox changes
+        if page != st.session_state.page:
+            st.session_state.page = page
+            st.rerun()
         
         st.markdown("---")
         
@@ -1484,15 +1496,15 @@ def main():
             """)
     
     # Main content based on selected page
-    if page == "Overview":
+    if st.session_state.page == "Overview":
         overview_dashboard()
-    elif page == "Net Worth":
+    elif st.session_state.page == "Net Worth":
         net_worth_dashboard()
-    elif page == "Portfolio":
+    elif st.session_state.page == "Portfolio":
         portfolio_dashboard()
-    elif page == "Transactions":
+    elif st.session_state.page == "Transactions":
         transaction_analysis_dashboard()
-    elif page == "Settings":
+    elif st.session_state.page == "Settings":
         st.markdown('<h1 class="main-header">⚙️ Settings</h1>', unsafe_allow_html=True)
         
         st.subheader("🗃️ Data Management")
