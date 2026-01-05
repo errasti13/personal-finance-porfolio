@@ -851,47 +851,6 @@ def portfolio_dashboard():
                 st.caption("💡 Tip: Enter any positive values - they will be normalized to relative weights automatically")
                 allocations = {}
                 
-                # Quick data availability check when assets are selected
-                with st.spinner("Checking data availability..."):
-                    tickers = [simulator.AVAILABLE_ASSETS[asset] for asset in selected_assets]
-                    # Use longer period for validation to match simulation needs
-                    historical_end_date = datetime.now().strftime('%Y-%m-%d')
-                    historical_start_date = '1990-01-01'  # Use longer period for better validation
-                    
-                    try:
-                        test_data = simulator.get_historical_data(
-                            tickers,
-                            historical_start_date,
-                            historical_end_date,
-                            lambda x, y: None  # No progress callback for quick check
-                        )
-                        
-                        # Check data availability with more detailed analysis
-                        valid_assets = []
-                        limited_assets = []
-                        
-                        for asset in selected_assets:
-                            ticker = simulator.AVAILABLE_ASSETS[asset]
-                            if ticker in test_data and not test_data[ticker].empty:
-                                data_years = len(test_data[ticker]) / 252  # Approximate trading days per year
-                                if data_years >= 20:  # Good for most simulations
-                                    valid_assets.append(f"{asset} ({data_years:.1f} years)")
-                                elif data_years >= 5:  # Limited but usable
-                                    limited_assets.append(f"{asset} ({data_years:.1f} years)")
-                        
-                        # Show detailed data availability status
-                        if valid_assets:
-                            st.success(f"✅ Good data coverage: {', '.join(valid_assets)}")
-                        
-                        if limited_assets:
-                            st.warning(f"⚠️ Limited data coverage: {', '.join(limited_assets)}. May limit simulation periods.")
-                        
-                        if not valid_assets and not limited_assets:
-                            st.error("❌ Insufficient data for selected assets. Please choose different assets.")
-                        
-                    except Exception as e:
-                        st.info("💡 Data availability will be verified when simulation runs.")
-                
                 # Quick asset compatibility check
                 asset_info = []
                 for asset in selected_assets:
@@ -951,6 +910,74 @@ def portfolio_dashboard():
                 help="Number of years to simulate forward"
             )
             
+            # Check data availability when assets or years change
+            if selected_assets:
+                # Create a unique key for current selection to detect changes
+                current_selection = f"{sorted(selected_assets)}_{years_to_project}"
+                
+                # Check if we need to validate (selection changed)
+                if ('last_validation_key' not in st.session_state or 
+                    st.session_state.last_validation_key != current_selection):
+                    
+                    with st.spinner("Validating data availability..."):
+                        tickers = [simulator.AVAILABLE_ASSETS[asset] for asset in selected_assets]
+                        historical_end_date = datetime.now().strftime('%Y-%m-%d')
+                        historical_start_date = '1990-01-01'
+                        
+                        try:
+                            test_data = simulator.get_historical_data(
+                                tickers,
+                                historical_start_date,
+                                historical_end_date,
+                                lambda x, y: None  # No progress callback for quick check
+                            )
+                            
+                            # Check data availability - simple true/false validation
+                            valid_assets = []
+                            insufficient_assets = []
+                            
+                            for asset in selected_assets:
+                                ticker = simulator.AVAILABLE_ASSETS[asset]
+                                if ticker in test_data and not test_data[ticker].empty:
+                                    data_years = len(test_data[ticker]) / 252
+                                    if data_years >= years_to_project:
+                                        valid_assets.append(f"{asset} ({data_years:.1f} years)")
+                                    else:
+                                        insufficient_assets.append(f"{asset} ({data_years:.1f} years, need {years_to_project} years)")
+                            
+                            # Store validation results
+                            st.session_state.data_validation = {
+                                'valid_assets': valid_assets,
+                                'insufficient_assets': insufficient_assets,
+                                'has_valid_data': len(valid_assets) > 0
+                            }
+                            st.session_state.last_validation_key = current_selection
+                            
+                        except Exception as e:
+                            st.session_state.data_validation = {
+                                'valid_assets': [],
+                                'insufficient_assets': [],
+                                'has_valid_data': False,
+                                'error': str(e)
+                            }
+                            st.session_state.last_validation_key = current_selection
+                
+                # Display validation results if available
+                if 'data_validation' in st.session_state:
+                    validation = st.session_state.data_validation
+                    
+                    if validation.get('error'):
+                        st.info("💡 Data availability will be verified when simulation runs.")
+                    elif validation['valid_assets']:
+                        st.success(f"✅ Valid data coverage: {', '.join(validation['valid_assets'])}")
+                    
+                    if validation['insufficient_assets']:
+                        st.warning(f"⚠️ Insufficient data: {', '.join(validation['insufficient_assets'])}. Consider reducing simulation period or choosing different assets.")
+                    
+                    if (not validation['valid_assets'] and not validation['insufficient_assets'] 
+                        and not validation.get('error')):
+                        st.error("❌ No data available for selected assets. Please choose different assets.")
+            
             # Validate projection period against available data
             if selected_assets and years_to_project > 15:
                 st.info(f"💡 For {years_to_project}-year simulations, ensure your assets have sufficient historical data. Gold typically has ~25 years, while S&P 500 has 100+ years.")
@@ -980,11 +1007,18 @@ def portfolio_dashboard():
             )
             
             # Run simulation button
+            can_simulate = (
+                total_allocation > 0 and 
+                len(selected_assets) >= 1 and
+                st.session_state.get('data_validation', {}).get('has_valid_data', False)
+            )
+            
             run_simulation = st.button(
                 "🚀 Run Simulation",
                 type="primary",
-                disabled=total_allocation <= 0 or len(selected_assets) < 1,
-                use_container_width=True
+                disabled=not can_simulate,
+                use_container_width=True,
+                help="Ensure you have valid assets and allocations before running simulation"
             )
         
         # Store settings in session state
