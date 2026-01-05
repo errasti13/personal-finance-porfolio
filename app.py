@@ -178,7 +178,7 @@ def net_worth_dashboard():
         uploaded_file = st.file_uploader(
             "Upload your net worth data (CSV)",
             type=['csv'],
-            help="CSV should have Date column and account columns with currency indicators (CHF, EUR, USD)"
+            help="CSV should have Date column and account columns with currency indicators like (EUR), (USD), (CHF)"
         )
         
         if uploaded_file is not None:
@@ -343,10 +343,16 @@ def net_worth_dashboard():
         st.markdown("""
         **Expected CSV format:**
         ```
-        Date,UBS Account (CHF),IBKR Account (EUR),Kutxabank Account (EUR)
+        Date,Bank 1 (EUR),Bank 2 (USD),Bank 3 (CHF)
         2025-01-31,10000.00,15000.00,1500.00
         2025-02-28,10500.00,15500.00,1550.00
         ```
+        
+        **Format Guidelines:**
+        - Date column in YYYY-MM-DD format
+        - Account columns with currency indicators (EUR), (USD), (CHF)
+        - Numeric values for account balances
+        - All currencies will be converted to EUR for unified tracking
         """)
 
 def transaction_analysis_dashboard():
