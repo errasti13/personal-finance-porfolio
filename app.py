@@ -839,7 +839,7 @@ def portfolio_dashboard():
             selected_assets = st.multiselect(
                 "Choose assets for your portfolio:",
                 available_assets,
-                default=["S&P 500", "MSCI World", "Gold"],
+                default=["S&P 500", "Gold"],
                 help="Select 2-10 assets for your portfolio"
             )
             
