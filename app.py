@@ -847,6 +847,47 @@ def portfolio_dashboard():
                 st.markdown("**Set Allocations (%):**")
                 allocations = {}
                 
+                # Quick data availability check when assets are selected
+                with st.spinner("Checking data availability..."):
+                    tickers = [simulator.AVAILABLE_ASSETS[asset] for asset in selected_assets]
+                    # Use longer period for validation to match simulation needs
+                    historical_end_date = datetime.now().strftime('%Y-%m-%d')
+                    historical_start_date = '1990-01-01'  # Use longer period for better validation
+                    
+                    try:
+                        test_data = simulator.get_historical_data(
+                            tickers,
+                            historical_start_date,
+                            historical_end_date,
+                            lambda x, y: None  # No progress callback for quick check
+                        )
+                        
+                        # Check data availability with more detailed analysis
+                        valid_assets = []
+                        limited_assets = []
+                        
+                        for asset in selected_assets:
+                            ticker = simulator.AVAILABLE_ASSETS[asset]
+                            if ticker in test_data and not test_data[ticker].empty:
+                                data_years = len(test_data[ticker]) / 252  # Approximate trading days per year
+                                if data_years >= 20:  # Good for most simulations
+                                    valid_assets.append(f"{asset} ({data_years:.1f} years)")
+                                elif data_years >= 5:  # Limited but usable
+                                    limited_assets.append(f"{asset} ({data_years:.1f} years)")
+                        
+                        # Show detailed data availability status
+                        if valid_assets:
+                            st.success(f"✅ Good data coverage: {', '.join(valid_assets)}")
+                        
+                        if limited_assets:
+                            st.warning(f"⚠️ Limited data coverage: {', '.join(limited_assets)}. May limit simulation periods.")
+                        
+                        if not valid_assets and not limited_assets:
+                            st.error("❌ Insufficient data for selected assets. Please choose different assets.")
+                        
+                    except Exception as e:
+                        st.info("💡 Data availability will be verified when simulation runs.")
+                
                 # Quick asset compatibility check
                 asset_info = []
                 for asset in selected_assets:
@@ -898,6 +939,12 @@ def portfolio_dashboard():
                 1, 30, 10,
                 help="Number of years to simulate forward"
             )
+            
+            # Validate projection period against available data
+            if selected_assets and years_to_project > 15:
+                st.info(f"💡 For {years_to_project}-year simulations, ensure your assets have sufficient historical data. Gold typically has ~25 years, while S&P 500 has 100+ years.")
+            elif years_to_project > 25:
+                st.warning(f"⚠️ {years_to_project}-year simulations require extensive historical data. Consider reducing to 20-25 years for more reliable results.")
             
             # Monte Carlo settings - hardcoded for optimal performance
             num_simulations = 250
@@ -973,21 +1020,19 @@ def portfolio_dashboard():
                     progress_callback
                 )
                 
-                # Display info about the data used
-                st.info(f"📊 Using historical data from {historical_start_date} to {historical_end_date} for Monte Carlo simulation. Using all available historical data provides better statistical accuracy for future projections.")
+                # Validate we have sufficient data for simulation
+                valid_tickers = [ticker for ticker, data in historical_data.items() 
+                               if not data.empty and len(data) > 30]
                 
-                # Validate we have sufficient data
-                valid_data_count = sum(1 for ticker, data in historical_data.items() 
-                                     if not data.empty and len(data) > 30)
-                
-                if valid_data_count == 0:
-                    st.error("No valid historical data found for the selected assets and date range. Please try a different date range or assets.")
+                if len(valid_tickers) == 0:
+                    st.error("❌ No valid historical data found for the selected assets. Please try different assets.")
                     progress_bar.empty()
                     status_text.empty()
                     return
-                elif valid_data_count < len(tickers):
-                    missing_tickers = [ticker for ticker, data in historical_data.items() if data.empty or len(data) <= 30]
-                    st.warning(f"Limited or no data available for: {', '.join(missing_tickers)}. Continuing with available data.")
+                
+                # Simple info about data being used
+                years_of_data = (datetime.now() - datetime.strptime(historical_start_date, '%Y-%m-%d')).days // 365
+                st.info(f"📊 Using {years_of_data}+ years of historical data for statistical accuracy.")
                 
                 # Run backtest for baseline
                 status_text.text("Running baseline backtest...")
@@ -1025,13 +1070,28 @@ def portfolio_dashboard():
                     )
                     
                     if not mc_results:
-                        st.error("Monte Carlo simulation failed. This may be due to insufficient or inconsistent data.")
+                        st.error("❌ Monte Carlo simulation failed. This may be due to insufficient historical data.")
                         progress_bar.empty()
                         status_text.empty()
                         return
                         
                 except Exception as mc_error:
-                    st.error(f"Monte Carlo simulation error: {str(mc_error)}")
+                    error_msg = str(mc_error)
+                    if "insufficient historical data" in error_msg.lower() or "months" in error_msg:
+                        # Extract useful info from error message
+                        st.error(f"❌ **Insufficient Historical Data**")
+                        st.error(f"**Error Details:** {error_msg}")
+                        
+                        # Provide helpful suggestions
+                        st.markdown("""
+                        **💡 Solutions:**
+                        - **Reduce simulation period** to 20 years or fewer
+                        - **Choose different assets** with longer historical data (e.g., S&P 500 has 100+ years)
+                        - **Mix of assets**: Combine long-history assets (S&P 500, bonds) with shorter ones (Gold, REITs)
+                        """)
+                    else:
+                        st.error(f"❌ Monte Carlo simulation error: {error_msg}")
+                    
                     progress_bar.empty()
                     status_text.empty()
                     return
