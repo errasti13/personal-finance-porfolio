@@ -70,7 +70,9 @@ class PortfolioSimulator:
                 if cache_key in self._data_cache:
                     return ticker, self._data_cache[cache_key]
                 
-                # Fetch data from Yahoo Finance
+                # Fetch data from Yahoo Finance with dividend adjustments
+                # auto_adjust=True ensures prices include dividend and stock split adjustments
+                # This gives us total return data (capital gains + dividends reinvested)
                 stock = yf.Ticker(ticker)
                 df = stock.history(start=start_date, end=end_date, auto_adjust=True)
                 
@@ -114,7 +116,7 @@ class PortfolioSimulator:
         Calculate portfolio returns based on allocations and historical data.
         
         Args:
-            allocations: Dictionary with ticker as key and allocation percentage as value
+            allocations: Dictionary with ticker as key and allocation percentage as value (will be normalized)
             data: Historical data for each ticker
             initial_investment: Starting portfolio value
             periodic_contribution: Amount to add to portfolio periodically (can be negative for withdrawals)
@@ -125,6 +127,24 @@ class PortfolioSimulator:
         """
         if not allocations or not data:
             return pd.DataFrame()
+        
+        # Normalize allocations to relative weights (don't require exactly 100%)
+        total_allocation = sum(allocation for allocation in allocations.values() if allocation > 0)
+        if total_allocation <= 0:
+            if hasattr(st, 'error'):
+                st.error("No valid allocations provided. All allocations are zero or negative.")
+            return pd.DataFrame()
+        
+        # Normalize allocations to sum to 100%
+        normalized_allocations = {}
+        for ticker, allocation in allocations.items():
+            if allocation > 0:
+                normalized_allocations[ticker] = (allocation / total_allocation) * 100
+            else:
+                normalized_allocations[ticker] = 0
+        
+        # Use normalized allocations for the rest of the calculation
+        allocations = normalized_allocations
         
         # Find assets with valid data
         valid_tickers = []
@@ -507,7 +527,7 @@ class PortfolioSimulator:
         Uses monthly returns for more realistic portfolio simulation.
         
         Args:
-            allocations: Dictionary with ticker as key and allocation percentage as value
+            allocations: Dictionary with ticker as key and allocation percentage as value (will be normalized)
             data: Historical data for each ticker
             initial_investment: Starting portfolio value
             years: Number of years to project
@@ -515,14 +535,30 @@ class PortfolioSimulator:
             progress_callback: Optional callback for progress updates
             periodic_contribution: Amount to contribute periodically
             contribution_frequency: How often to contribute ('monthly', 'yearly')
-            periodic_withdrawal: Amount to withdraw periodically  
-            withdrawal_frequency: How often to withdraw ('monthly', 'yearly')
             
         Returns:
             Dictionary with simulation results including best/worst/median scenarios
         """
         if not allocations or not data:
             return {}
+        
+        # Normalize allocations to relative weights (don't require exactly 100%)
+        total_allocation = sum(allocation for allocation in allocations.values() if allocation > 0)
+        if total_allocation <= 0:
+            if hasattr(st, 'error'):
+                st.error("No valid allocations provided for Monte Carlo simulation.")
+            return {}
+        
+        # Normalize allocations to sum to 100%
+        normalized_allocations = {}
+        for ticker, allocation in allocations.items():
+            if allocation > 0:
+                normalized_allocations[ticker] = (allocation / total_allocation) * 100
+            else:
+                normalized_allocations[ticker] = 0
+        
+        # Use normalized allocations for the rest of the simulation
+        allocations = normalized_allocations
         
         # Convert daily data to monthly data for each asset
         monthly_data = {}

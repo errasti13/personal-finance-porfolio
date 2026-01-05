@@ -829,6 +829,9 @@ def portfolio_dashboard():
     with tab1:
         st.subheader("🎯 Portfolio Simulator with Monte Carlo")
         
+        # Important notice about total returns
+        st.info("💡 **Total Returns**: All simulations include dividends and stock splits for accurate total return calculations.")
+        
         col1, col2 = st.columns([2, 1])
         
         with col1:
@@ -845,6 +848,7 @@ def portfolio_dashboard():
             
             if selected_assets:
                 st.markdown("**Set Allocations (%):**")
+                st.caption("💡 Tip: Enter any positive values - they will be normalized to relative weights automatically")
                 allocations = {}
                 
                 # Quick data availability check when assets are selected
@@ -894,11 +898,6 @@ def portfolio_dashboard():
                     ticker = simulator.AVAILABLE_ASSETS[asset]
                     asset_info.append(f"• **{asset}** ({ticker})")
                 
-                with st.expander("📊 Selected Assets Information", expanded=False):
-                    st.markdown("You've selected:")
-                    for info in asset_info:
-                        st.markdown(info)
-                
                 # Create allocation sliders
                 col_count = min(len(selected_assets), 3)
                 cols = st.columns(col_count)
@@ -908,17 +907,30 @@ def portfolio_dashboard():
                         allocations[simulator.AVAILABLE_ASSETS[asset]] = st.slider(
                             asset,
                             0, 100, 
-                            100 // len(selected_assets),  # Equal allocation by default
+                            50,  # Default to equal weights that will be normalized
                             step=1,
-                            key=f"allocation_{asset}"
+                            key=f"allocation_{asset}",
+                            help="Any positive value works - all allocations will be normalized to relative weights"
                         )
                 
-                # Check if allocations sum to 100%
+                # Check allocations and normalize to relative weights
                 total_allocation = sum(allocations.values())
-                if total_allocation != 100:
-                    st.warning(f"⚠️ Total allocation: {total_allocation}%. Please adjust to 100%.")
+                if total_allocation > 0:
+                    # Normalize allocations to relative weights (don't require exactly 100%)
+                    normalized_allocations = {}
+                    for ticker, allocation in allocations.items():
+                        normalized_allocations[ticker] = (allocation / total_allocation) * 100
+                    allocations = normalized_allocations
+                    
+                    # Show normalized allocations
+                    allocation_display = []
+                    for ticker, allocation in allocations.items():
+                        asset_name = next((name for name, t in simulator.AVAILABLE_ASSETS.items() if t == ticker), ticker)
+                        raw_allocation = sum(v for k, v in st.session_state.items() 
+                                           if k.startswith('allocation_') and simulator.AVAILABLE_ASSETS.get(k.replace('allocation_', '')) == ticker)
+                        allocation_display.append(f"**{asset_name}**: {raw_allocation:.0f}% → {allocation:.1f}%")
                 else:
-                    st.success(f"✅ Total allocation: {total_allocation}%")
+                    st.warning("⚠️ Please set at least one asset allocation above 0%.")
         
         with col2:
             st.markdown("**Simulation Settings:**")
@@ -971,12 +983,12 @@ def portfolio_dashboard():
             run_simulation = st.button(
                 "🚀 Run Simulation",
                 type="primary",
-                disabled=total_allocation != 100 or len(selected_assets) < 1,
+                disabled=total_allocation <= 0 or len(selected_assets) < 1,
                 use_container_width=True
             )
         
         # Store settings in session state
-        if selected_assets and total_allocation == 100:
+        if selected_assets and total_allocation > 0:
             st.session_state.portfolio_settings = {
                 'allocations': allocations,
                 'selected_assets': selected_assets,
