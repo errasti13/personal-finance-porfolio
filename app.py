@@ -962,14 +962,12 @@ def portfolio_dashboard():
                             }
                             st.session_state.last_validation_key = current_selection
                 
-                # Display validation results if available
+                # Display validation results if available - only show warnings/errors
                 if 'data_validation' in st.session_state:
                     validation = st.session_state.data_validation
                     
                     if validation.get('error'):
                         st.info("💡 Data availability will be verified when simulation runs.")
-                    elif validation['valid_assets']:
-                        st.success(f"✅ Valid data coverage: {', '.join(validation['valid_assets'])}")
                     
                     if validation['insufficient_assets']:
                         st.warning(f"⚠️ Insufficient data: {', '.join(validation['insufficient_assets'])}. Consider reducing simulation period or choosing different assets.")
